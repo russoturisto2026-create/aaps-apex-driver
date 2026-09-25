@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Palette for the ATC3 pump screen. Fixed dark colours, independent of the app's day/night
+        theme: the screen is meant to read like the pump's own display, not like the rest of AAPS.
+    -->
+    <color name="atc3_halo_bg">#0A0D0E</color>
+    <color name="atc3_halo_surface">#0D1518</color>
+    <color name="atc3_halo_surface_2">#132025</color>
+    <color name="atc3_halo_line">#294047</color>
+    <color name="atc3_halo_ink">#F7F7F4</color>
+    <color name="atc3_halo_muted">#A4A7A3</color>
+    <color name="atc3_halo_faint">#6E726F</color>
+    <color name="atc3_halo_accent">#75E9FF</color>
+    <color name="atc3_halo_accent_ink">#061114</color>
+    <!-- Battery ring: the same brightness as the accent, kept apart from it by hue so the
+         two circles side by side read as two different measurements. -->
+    <color name="atc3_halo_battery">#7BE9A8</color>
+    <color name="atc3_halo_warn">#FFCB55</color>
+    <color name="atc3_halo_danger">#FF7066</color>
+</resources>

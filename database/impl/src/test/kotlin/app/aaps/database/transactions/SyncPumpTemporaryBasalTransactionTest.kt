@@ -61,6 +61,41 @@ class SyncPumpTemporaryBasalTransactionTest {
     }
 
     @Test
+    fun `a record already cut by an end event is not reopened by its original duration`() {
+        val tb = createTemporaryBasal(pumpId = 100L, timestamp = 1000L, rate = 1.5, duration = 60_000L)
+        val existing = createTemporaryBasal(pumpId = 100L, timestamp = 1000L, rate = 1.5, duration = 20_000L)
+        existing.interfaceIDs.endId = 200L
+
+        whenever(temporaryBasalDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(existing)
+
+        val transaction = SyncPumpTemporaryBasalTransaction(tb, null)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(result.updated).isEmpty()
+        assertThat(existing.duration).isEqualTo(20_000L)
+    }
+
+    @Test
+    fun `a record already cut by an end event can still be shortened by the pump`() {
+        // The pump's journal says the temporary basal delivered less than the cut credits it with:
+        // the end the pump names is earlier, and the record follows the pump.
+        val tb = createTemporaryBasal(pumpId = 100L, timestamp = 1000L, rate = 1.5, duration = 15_000L)
+        val existing = createTemporaryBasal(pumpId = 100L, timestamp = 1000L, rate = 1.5, duration = 20_000L)
+        existing.interfaceIDs.endId = 200L
+
+        whenever(temporaryBasalDao.findByPumpIds(100L, InterfaceIDs.PumpType.DANA_I, "ABC123")).thenReturn(existing)
+
+        val transaction = SyncPumpTemporaryBasalTransaction(tb, null)
+        transaction.database = database
+        val result = transaction.run()
+
+        assertThat(result.updated).hasSize(1)
+        assertThat(existing.duration).isEqualTo(15_000L)
+        verify(temporaryBasalDao).updateExistingEntry(existing)
+    }
+
+    @Test
     fun `does not update when values are same`() {
         val tb = createTemporaryBasal(pumpId = 100L, timestamp = 1000L, rate = 1.5, duration = 60_000L)
         val existing = createTemporaryBasal(pumpId = 100L, timestamp = 1000L, rate = 1.5, duration = 60_000L)

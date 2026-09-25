@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bluetooth radio off: the same circle, stroked in the plain ink colour. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/atc3_halo_line">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/atc3_halo_surface" />
+            <stroke android:width="6dp" android:color="@color/atc3_halo_ink" />
+        </shape>
+    </item>
+</ripple>

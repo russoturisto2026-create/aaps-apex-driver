@@ -1,0 +1,590 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="22dp"
+        android:paddingTop="40dp"
+        android:paddingBottom="96dp">
+
+        <!-- Screen title. -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            android:fontFamily="sans-serif-black"
+            android:text="@string/atc3_halo_title"
+            android:textColor="@color/atc3_halo_accent"
+            android:textSize="26sp" />
+
+        <!--
+            Nothing else on this screen matters as much as who else can drive the pump: without a
+            Bluetooth password there is no pairing, no bonding and no encryption between it and
+            anybody within radio range. Above the fold and gone the moment the link is protected.
+        -->
+        <TextView
+            android:id="@+id/atc3_link_warning"
+            style="@style/ATC3.Halo.Caption"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:background="@drawable/atc3_halo_pill_value_bg"
+            android:padding="10dp"
+            android:textColor="@color/atc3_halo_warn"
+            android:visibility="gone"
+            tools:text="No Bluetooth password: anything within radio range can control this pump."
+            tools:visibility="visible" />
+
+        <!--
+            Connection: the pump is picked here, not buried in app settings. Everything about
+            reaching the pump lives in this one card, which is why the link state sits under the
+            address rather than in a card of its own further down.
+        -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="@drawable/atc3_halo_card_bg"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:id="@+id/atc3_serial_row"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackground"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/atc3_serial_value"
+                        style="@style/ATC3.Halo.Value"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:textSize="17sp"
+                        tools:text="12345678" />
+
+                    <TextView
+                        android:id="@+id/atc3_address_value"
+                        style="@style/ATC3.Halo.Caption.Faint"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        tools:text="11:22:33:AA:BB:CC" />
+                </LinearLayout>
+
+                <!-- Link state, under the address of the device it describes. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="13dp"
+                        android:layout_height="13dp"
+                        android:layout_marginEnd="7dp"
+                        android:contentDescription="@string/atc3_halo_connection_label"
+                        android:src="@drawable/ic_atc3_signal"
+                        app:tint="@color/atc3_halo_muted" />
+
+                    <TextView
+                        android:id="@+id/atc3_connection_value"
+                        style="@style/ATC3.Halo.Caption"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        tools:text="Connected" />
+
+                    <TextView
+                        android:id="@+id/atc3_connection_caption"
+                        style="@style/ATC3.Halo.Caption.Faint"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        tools:text="2 minutes ago" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!--
+                A circle, so the width and the height have to be equal; otherwise the ring draws as
+                an oval however round the drawable is.
+            -->
+            <ImageButton
+                android:id="@+id/atc3_select_pump"
+                android:layout_width="60dp"
+                android:layout_height="60dp"
+                android:layout_gravity="center_vertical"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/atc3_halo_icon_ring_off"
+                android:contentDescription="@string/atc3_halo_select_pump"
+                android:padding="15dp"
+                android:src="@drawable/ic_bluetooth_white_48dp"
+                app:tint="@color/atc3_halo_ink" />
+        </LinearLayout>
+
+        <!--
+            The two readings the pump runs out of: insulin and battery. Same ring, same size, same
+            structure underneath, so the pair reads as one row of two gauges rather than as a gauge
+            next to a block of text.
+        -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingHorizontal="8dp"
+                android:paddingTop="16dp"
+                android:paddingBottom="8dp">
+
+                <!--
+                    Everything here sizes itself. A box of exactly the ring's indicatorSize would
+                    clip it: the indicator asks for indicatorSize plus its inset on every side.
+                -->
+                <FrameLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal">
+
+                    <com.google.android.material.progressindicator.CircularProgressIndicator
+                        android:id="@+id/atc3_reservoir_ring"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:indeterminate="false"
+                        android:max="100"
+                        app:indicatorColor="@color/atc3_halo_accent"
+                        app:indicatorInset="4dp"
+                        app:indicatorSize="132dp"
+                        app:trackColor="@color/atc3_halo_line"
+                        app:trackCornerRadius="4dp"
+                        app:trackThickness="9dp" />
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="bottom"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:id="@+id/atc3_reservoir_units"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="sans-serif-medium"
+                            android:textColor="@color/atc3_halo_ink"
+                            android:textSize="34sp"
+                            tools:text="122" />
+
+                        <TextView
+                            style="@style/ATC3.Halo.Caption"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginBottom="6dp"
+                            android:text="@string/atc3_halo_units_short" />
+                    </LinearLayout>
+                </FrameLayout>
+
+                <TextView
+                    style="@style/ATC3.Halo.Eyebrow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/atc3_halo_reservoir_eyebrow" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/atc3_reservoir_percent"
+                        style="@style/ATC3.Halo.Caption"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        tools:text="61%" />
+
+                    <TextView
+                        android:id="@+id/atc3_reservoir_caption"
+                        style="@style/ATC3.Halo.Caption.Faint"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        tools:text="of 300 U" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingHorizontal="8dp"
+                android:paddingTop="16dp"
+                android:paddingBottom="8dp">
+
+                <FrameLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_horizontal">
+
+                    <com.google.android.material.progressindicator.CircularProgressIndicator
+                        android:id="@+id/atc3_battery_ring"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:indeterminate="false"
+                        android:max="100"
+                        app:indicatorColor="@color/atc3_halo_battery"
+                        app:indicatorInset="4dp"
+                        app:indicatorSize="132dp"
+                        app:trackColor="@color/atc3_halo_line"
+                        app:trackCornerRadius="4dp"
+                        app:trackThickness="9dp" />
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:gravity="bottom"
+                        android:orientation="horizontal">
+
+                        <!--
+                            The pump sends volts and nothing else. The percentage is derived from
+                            them, see Atc3StatusV2, and the voltage it came from is kept underneath
+                            rather than replaced by it.
+                        -->
+                        <TextView
+                            android:id="@+id/atc3_battery_value"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:fontFamily="sans-serif-medium"
+                            android:textColor="@color/atc3_halo_ink"
+                            android:textSize="34sp"
+                            tools:text="52" />
+
+                        <TextView
+                            style="@style/ATC3.Halo.Caption"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginBottom="6dp"
+                            android:text="@string/atc3_halo_percent_short" />
+                    </LinearLayout>
+                </FrameLayout>
+
+                <TextView
+                    style="@style/ATC3.Halo.Eyebrow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/atc3_halo_battery_label" />
+
+                <TextView
+                    android:id="@+id/atc3_battery_caption"
+                    style="@style/ATC3.Halo.Caption.Faint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    tools:text="1.38 V" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- One card under each ring: what the insulin means in days, what the battery side can do. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@drawable/atc3_halo_card_bg"
+                android:minHeight="95dp">
+
+                <ImageView
+                    android:layout_width="17dp"
+                    android:layout_height="17dp"
+                    android:layout_gravity="top|end"
+                    android:layout_margin="13dp"
+                    android:contentDescription="@string/atc3_halo_days_label"
+                    android:src="@drawable/ic_atc3_hourglass"
+                    app:tint="@color/atc3_halo_muted" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_margin="13dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/ATC3.Halo.Caption"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/atc3_halo_days_label" />
+
+                    <TextView
+                        android:id="@+id/atc3_reservoir_days"
+                        style="@style/ATC3.Halo.Value"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="7dp"
+                        tools:text="≈ 2.4 days" />
+
+                    <TextView
+                        android:id="@+id/atc3_reservoir_days_caption"
+                        style="@style/ATC3.Halo.Caption.Faint"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        tools:text="at 7-day average use" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <!--
+                Running or suspended, as a button: the state is what the button changes, so it is
+                shown on the control itself rather than restated somewhere else on the screen.
+            -->
+            <LinearLayout
+                android:id="@+id/atc3_pump_state_button"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginStart="9dp"
+                android:background="@drawable/atc3_halo_card_bg"
+                android:foreground="?attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:minHeight="95dp"
+                android:orientation="vertical"
+                android:padding="13dp">
+
+                <ImageView
+                    android:id="@+id/atc3_pump_state_icon"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_atc3_play"
+                    app:tint="@color/atc3_halo_battery" />
+
+                <TextView
+                    android:id="@+id/atc3_pump_state_label"
+                    style="@style/ATC3.Halo.Value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:gravity="center"
+                    tools:text="Running" />
+
+                <!--
+                    The lock, under the state it does not replace: a locked pump goes on delivering,
+                    so it is running or paused as well as locked. Hidden while it is not locked,
+                    which is nearly always.
+                -->
+                <TextView
+                    android:id="@+id/atc3_pump_state_locked"
+                    style="@style/ATC3.Halo.Caption.Faint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:visibility="gone"
+                    android:text="@string/atc3_halo_state_locked"
+                    tools:visibility="visible"
+                    tools:text="Locked" />
+            </LinearLayout>
+        </LinearLayout>
+
+
+        <!-- The pump's own settings, one block sent whole on Save, and the driver's own two rows. -->
+        <TextView
+            style="@style/ATC3.Halo.Eyebrow.Accent"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="@string/atc3_halo_settings_eyebrow" />
+
+        <TextView
+            style="@style/ATC3.Halo.Heading"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:layout_marginBottom="14dp"
+            android:text="@string/atc3_halo_settings_heading" />
+
+        <TextView
+            android:id="@+id/atc3_settings_hint"
+            style="@style/ATC3.Halo.Caption"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="14dp"
+            android:background="@drawable/atc3_halo_pill_value_bg"
+            android:padding="10dp"
+            android:textColor="@color/atc3_halo_warn"
+            tools:text="Connect to the pump to read its settings." />
+
+        <!-- Maximum bolus, settings block payload 14..15. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_max_bolus"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_max_bolus_label" />
+
+                <TextView style="@style/ATC3.Halo.Caption.Faint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_max_bolus_caption" />
+            </LinearLayout>
+
+            <app.aaps.pump.atc3.ui.Atc3NumberPicker
+                android:id="@+id/atc3_max_bolus_picker"
+                android:layout_width="150dp"
+                android:layout_height="40dp"
+                android:theme="@style/Theme.MaterialComponents"
+                app:customContentDescription="@string/atc3_halo_max_bolus_label" />
+        </LinearLayout>
+
+        <!-- Maximum basal rate, settings block payload 12..13. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_max_basal"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_max_basal_label" />
+
+                <TextView style="@style/ATC3.Halo.Caption.Faint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_max_basal_caption" />
+            </LinearLayout>
+
+            <app.aaps.pump.atc3.ui.Atc3NumberPicker
+                android:id="@+id/atc3_max_basal_picker"
+                android:layout_width="150dp"
+                android:layout_height="40dp"
+                android:theme="@style/Theme.MaterialComponents"
+                app:customContentDescription="@string/atc3_halo_max_basal_label" />
+        </LinearLayout>
+
+        <!-- Bolus speed, settings block payload byte 0 bit 0x01, set is the low speed. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_bolus_speed"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clickable="true"
+            android:focusable="true">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_bolus_speed_label" />
+
+                <TextView style="@style/ATC3.Halo.Caption.Faint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_bolus_speed_caption" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/ATC3.Halo.SelectBox" android:layout_width="wrap_content">
+
+                <TextView
+                    android:id="@+id/atc3_bolus_speed_value"
+                    style="@style/ATC3.Halo.Value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    tools:text="Normal" />
+
+                <ImageView
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_marginStart="6dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_atc3_chevron_down"
+                    app:tint="@color/atc3_halo_muted" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Bluetooth password, the pump's connection authorisation. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_password"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clickable="true"
+            android:focusable="true">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_password_label" />
+
+                <TextView style="@style/ATC3.Halo.Caption.Faint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_password_caption" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/ATC3.Halo.SelectBox" android:layout_width="wrap_content">
+
+                <TextView
+                    android:id="@+id/atc3_password_value"
+                    style="@style/ATC3.Halo.Value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    tools:text="487613" />
+
+                <ImageView
+                    android:layout_width="16dp"
+                    android:layout_height="16dp"
+                    android:layout_marginStart="6dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_atc3_chevron_down"
+                    app:tint="@color/atc3_halo_muted" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Driver trace, Atc3BooleanKey.Trace. A plain switch, not a settings draft field. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_trace"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_trace_label" />
+
+                <TextView style="@style/ATC3.Halo.Caption.Faint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_trace_caption" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/atc3_trace_switch"
+                style="@style/ATC3.Halo.Switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/atc3_halo_trace_label" />
+        </LinearLayout>
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

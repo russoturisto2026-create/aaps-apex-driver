@@ -474,6 +474,44 @@ enum class PumpType(
         pumpCapability = PumpCapability.DiaconnCapabilities,
         source = Source.EQuil,
         useHardwareLink = true,
+    ),
+
+    /**
+     * ATC3, protocol 4.12.
+     *
+     * Dose and rate scale is 1 raw = 0.025 U / 0.025 U/h, and the basal profile consists of
+     * 48 half hour slots, hence [Capability.BasalRate30min].
+     */
+    ATC3(
+        description = "ATC3",
+        manufacturer = ManufacturerType.Atc3,
+        model = "ATC3",
+        bolusSize = 0.025,
+        specialBolusSize = null,
+        // The pump does have an extended bolus, but the driver offers none: its history record
+        // carries no duration, so one read back could not be reconstructed.
+        extendedBolusSettings = null,
+        pumpTempBasalType = PumpTempBasalType.Absolute,
+        // The duration byte of a temporary basal counts quarter hours.
+        // The two ceilings are outer bounds rather than device limits: what actually
+        // constrains a dose is the pump's own configured maximum, which the driver reads from the
+        // settings block and applies in Atc3PumpPlugin.applyBasalConstraints.
+        tbrSettings = DoseSettings(0.025, 15, 24 * 60, 0.0, 25.0),
+        specialBasalDurations = arrayOf(
+            Capability.BasalRate_Duration15minAllowed,
+            Capability.BasalRate_Duration30minAllowed
+        ),
+        baseBasalMinValue = 0.025,
+        baseBasalMaxValue = 25.0, // Outer bound, see tbrSettings above.
+        baseBasalStep = 0.025,
+        baseBasalSpecialSteps = null,
+        pumpCapability = PumpCapability.Atc3Capabilities,
+        // A 300 U cartridge; the pump reports a little over its nominal size when freshly filled.
+        maxReservoirReading = 300,
+        // The pump sends volts and nothing else; the percentage is worked out from them, see
+        // Atc3Const.
+        supportBatteryLevel = true,
+        source = Source.Atc3
     );
 
     fun manufacturer() = parent?.manufacturer ?: manufacturer ?: throw IllegalStateException()
@@ -511,7 +549,8 @@ enum class PumpType(
         MDI,
         VirtualPump,
         Unknown,
-        EQuil
+        EQuil,
+        Atc3
     }
 
     companion object {
