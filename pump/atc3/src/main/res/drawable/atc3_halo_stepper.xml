@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A stepper button: an outlined capsule, made round by an equal width and height. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/atc3_halo_line">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/atc3_halo_surface_2" />
+            <stroke android:width="1dp" android:color="@color/atc3_halo_line" />
+        </shape>
+    </item>
+</ripple>

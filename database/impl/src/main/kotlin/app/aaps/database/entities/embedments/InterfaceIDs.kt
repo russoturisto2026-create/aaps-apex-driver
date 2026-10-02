@@ -53,7 +53,8 @@ data class InterfaceIDs @Ignore constructor(
         MEDTRUM_UNTESTED,
         USER,
         CACHE,
-        EQUIL;
+        EQUIL,
+        ATC3;
 
         companion object {
 

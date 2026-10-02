@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+
+    <application>
+        <activity
+            android:name="app.aaps.pump.atc3.ui.Atc3ScanActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme" />
+    </application>
+
+</manifest>

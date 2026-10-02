@@ -18,10 +18,15 @@ class SyncPumpTemporaryBasalTransaction(
         val result = TransactionResult()
         val existing = database.temporaryBasalDao.findByPumpIds(temporaryBasal.interfaceIDs.pumpId!!, temporaryBasal.interfaceIDs.pumpType!!, temporaryBasal.interfaceIDs.pumpSerial!!)
         if (existing != null) {
+            // A record already cut by an end event keeps its end against a pump re-sending the
+            // duration it was started for, which would reopen it. It may still be shortened: a
+            // pump whose journal says how much a temporary basal actually delivered names an end
+            // earlier than the cut, and that is the pump's own account of the record.
+            val shortened = temporaryBasal.duration < existing.duration
             if (
                 existing.timestamp != temporaryBasal.timestamp ||
                 existing.rate != temporaryBasal.rate ||
-                existing.duration != temporaryBasal.duration && existing.interfaceIDs.endId == null ||
+                existing.duration != temporaryBasal.duration && (existing.interfaceIDs.endId == null || shortened) ||
                 existing.type != (type ?: existing.type)
             ) {
                 val old = existing.copy()

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+        Empty root so the dotted styles below resolve their implicit parent: AAPT looks up
+        "ATC3.Halo" for a style named "ATC3.Halo.Eyebrow" with no explicit parent= attribute.
+    -->
+    <style name="ATC3.Halo" parent="" />
+
+    <!-- Small caps label above a value, e.g. "RESERVOIR", "CONNECTION". -->
+    <style name="ATC3.Halo.Eyebrow">
+        <item name="android:textColor">@color/atc3_halo_faint</item>
+        <item name="android:textSize">10sp</item>
+        <item name="android:letterSpacing">0.14</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <style name="ATC3.Halo.Eyebrow.Accent">
+        <item name="android:textColor">@color/atc3_halo_accent</item>
+    </style>
+
+    <!-- Section heading, e.g. "Sound and interface". -->
+    <style name="ATC3.Halo.Heading">
+        <item name="android:textColor">@color/atc3_halo_ink</item>
+        <item name="android:textSize">19sp</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+
+    <style name="ATC3.Halo.Value">
+        <item name="android:textColor">@color/atc3_halo_ink</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <style name="ATC3.Halo.Value.Large">
+        <item name="android:textSize">27sp</item>
+    </style>
+
+    <style name="ATC3.Halo.Caption">
+        <item name="android:textColor">@color/atc3_halo_muted</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+
+    <style name="ATC3.Halo.Caption.Faint">
+        <item name="android:textColor">@color/atc3_halo_faint</item>
+        <item name="android:textSize">10sp</item>
+    </style>
+
+    <!-- Outlined capsule button, e.g. stepper +/-, "Select pump". -->
+    <style name="ATC3.Halo.Button.Capsule" parent="Widget.AppCompat.Button.Borderless">
+        <item name="android:background">@drawable/atc3_halo_capsule_outline</item>
+        <item name="android:textColor">@color/atc3_halo_ink</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:minHeight">38dp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+    </style>
+
+    <!-- Filled accent capsule, e.g. "Apply". -->
+    <style name="ATC3.Halo.Button.Capsule.Filled">
+        <item name="android:background">@drawable/atc3_halo_capsule_filled</item>
+        <item name="android:textColor">@color/atc3_halo_accent_ink</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- One row inside a settings list: label + control, divider below. -->
+    <style name="ATC3.Halo.SettingRow">
+        <item name="android:orientation">horizontal</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingBottom">12dp</item>
+        <item name="android:background">@drawable/atc3_halo_row_divider</item>
+    </style>
+
+    <!-- The control side of a row that opens a list of values: current value plus a chevron. -->
+    <style name="ATC3.Halo.SelectBox">
+        <item name="android:layout_height">38dp</item>
+        <item name="android:background">@drawable/atc3_halo_pill_value_bg</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:minWidth">96dp</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">8dp</item>
+    </style>
+
+    <!-- The label side of a settings row: title above, caption below. -->
+    <style name="ATC3.Halo.SettingLabels">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_marginEnd">10dp</item>
+        <item name="android:orientation">vertical</item>
+    </style>
+
+    <style name="ATC3.Halo.Switch" parent="Widget.MaterialComponents.CompoundButton.Switch">
+        <item name="trackTint">@color/atc3_halo_switch_track</item>
+        <item name="thumbTint">@color/atc3_halo_switch_thumb</item>
+    </style>
+
+</resources>
