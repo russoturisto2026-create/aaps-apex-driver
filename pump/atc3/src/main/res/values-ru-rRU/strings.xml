@@ -10,14 +10,12 @@
     <string name="atc3_scan_selected">Выбрано %1$s</string>
     <string name="atc3_not_supported_extended_bolus">Драйвер Apex не поддерживает продлённый болюс</string>
     <string name="atc3_not_supported_percent_tbr">Драйвер Apex не поддерживает временный базал в процентах</string>
-    <string name="atc3_not_implemented">Драйвер Apex пока не выполняет эту операцию</string>
     <string name="atc3_not_connected">Помпа Apex не подключена</string>
     <string name="atc3_refused_by_pump">Помпа отклонила команду. Проверьте ограничения, заданные на помпе.</string>
     <string name="atc3_alarm_stop_locked">Помпа под тревогой ничего не подаёт и при этом заблокирована, поэтому остановить её отсюда нельзя. Разблокируйте помпу и остановите её.</string>
     <string name="atc3_no_delivery">Помпа сообщает, что подаёт инсулин, но резервуар не убывает. Проверьте помпу и инфузионный набор.</string>
     <string name="atc3_command_data_changed">Записи помпы изменили то, что знал AAPS; петля заново решит по исправленным данным</string>
-    <string name="atc3_basal_critical">Помпа насчитала %1$+.3f ед. против журнала AAPS — больше, чем объясняет шаг подачи помпы. Петля остановлена. Проверьте помпу.</string>
-    <string name="atc3_basal_critical_loop_blocked">Поданное помпой и журнал AAPS разошлись слишком далеко. Петля остановлена, пока они не сойдутся.</string>
+    <string name="atc3_journal_unexplained">Помпа насчитала на %1$.3f ед. больше, чем учтено в журнале AAPS, и её журналы этого не объясняют. Проверьте помпу.</string>
     <string name="atc3_bolus_unconfirmed_dropped">Помпа записала более поздний болюс, но так и не записала болюс %1$.2f ед. В AAPS он обнулён. Проверьте на помпе, был ли подан инсулин.</string>
     <string name="atc3_no_delivery_loop_blocked">Помпа не подаёт инсулин, о подаче которого сообщает. Петля остановлена, пока помпу не проверят.</string>
     <string name="atc3_firmware_too_old">Прошивка помпы %1$s старше %2$s и небезопасна: у неё нет пароля Bluetooth, и управлять помпой может кто угодно в радиусе действия радио. AAPS не будет работать с этой помпой. Обратитесь к дистрибьютору и обновите прошивку.</string>
@@ -124,6 +122,9 @@
     <string name="atc3_halo_bolus_speed_low">Низкая</string>
     <string name="atc3_trace_title">Записывать трассировку драйвера</string>
     <string name="atc3_trace_summary">По строке на событие в журнале AAPS: как часто драйвер обращается к помпе, в каком порядке идут обмены и что из них не удалось</string>
+    <string name="atc3_half_hour_read">Apex: чтение счётчика помпы на границе получаса</string>
+    <string name="atc3_exact_basal_title">Записывать базал по факту подачи</string>
+    <string name="atc3_exact_basal_summary">Выключено: временные базалы остаются в истории такими, как были заказаны. Включено: каждый прошедший получас записывается одной строкой базала со ставкой по счётчику подачи самой помпы, вместо строк команд, и активный инсулин считается от реально поданного.</string>
     <string name="atc3_hold_link_title">Держать связь с помпой</string>
     <string name="atc3_hold_link_summary">Оставаться на связи между обменами вместо того, чтобы переподключаться каждые несколько минут. Помпа подаёт голос раз в три минуты; если он пропал, связь снимается и поднимается заново. Выключайте, только если на этом телефоне связь окажется ненадёжной.</string>
     <string name="atc3_password_given_up">Помпа десять раз отвергла пароль Bluetooth, драйвер прекратил попытки. Посмотрите текущий B/P на экране состояния помпы и введите его в настройках Apex.</string>
@@ -143,6 +144,11 @@
     <string name="atc3_halo_password_written">Теперь помпа использует %1$s. Проверьте строку B/P на её экране.</string>
     <string name="atc3_halo_password_write_failed">Помпа не приняла новый пароль: %1$s</string>
     <string name="atc3_halo_password_random">Случайный</string>
+    <string name="atc3_halo_exact_basal_caption">каждый прошедший получас — одной строкой по счётчику помпы, вместо строк команд</string>
+    <string name="atc3_halo_hold_link_caption">оставаться на связи между обменами, а не переподключаться каждый раз</string>
+    <string name="atc3_halo_day_account_label">Подано за сутки: AAPS и помпа</string>
+    <string name="atc3_halo_day_account_value">AAPS %1$.3f Ед · помпа %2$.3f Ед · отклонение %3$+.3f Ед</string>
+    <string name="atc3_halo_day_account_none">ещё не сверялось</string>
     <string name="atc3_halo_trace_label">Трассировка драйвера</string>
     <string name="atc3_halo_trace_caption">машиночитаемый лог для стендовых захватов, выключен, если захват не идёт</string>
     <string name="atc3_halo_password_change_hint">Задать помпе новый пароль Bluetooth. Чтобы ввести уже используемый, откройте экран выбора помпы.</string>

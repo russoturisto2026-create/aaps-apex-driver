@@ -582,25 +582,6 @@ object Atc3Const {
         /** Screen brightness percentages, in the order the level byte indexes them. */
         val BRIGHTNESS_PERCENTS = intArrayOf(10, 30, 50, 60, 80, 100)
 
-        /**
-         * What each editable field will accept.
-         *
-         * These are the bounds the pump's own screens offer, so that a value entered here is one
-         * the pump would have let the user enter on it.
-         */
-        const val MAX_BOLUS_CEILING = 30.0
-        const val MAX_BASAL_FALLBACK_CEILING = 25.0
-        const val LOW_INSULIN_UNITS_MAX = 100
-        const val LOW_INSULIN_HOURS_MAX = 24.0
-        const val DAILY_LIMIT_UNITS_MAX = 500
-        const val SCREEN_TIMEOUT_SECONDS_MIN = 5
-        const val SCREEN_TIMEOUT_SECONDS_MAX = 300
-        const val SCREEN_TIMEOUT_SECONDS_STEP = 5
-
-        /** Auto off delay range, whole hours. */
-        const val AUTO_OFF_HOURS_MIN = 1
-        const val AUTO_OFF_HOURS_MAX = 7
-
         /** One raw unit of the screen timeout, in seconds. */
         const val SCREEN_TIMEOUT_SCALE = 0.1
 
@@ -1073,27 +1054,6 @@ object Atc3Const {
     const val BOLUS_SPACING_MS = 60_000L
 
     /**
-     * A bolus is sent only while the phone's second of the minute lies between these two, so
-     * that the minute the pump stamps its record with is the minute of the command whatever
-     * the pump's clock is doing within ten seconds of the phone's (user, 2026-09-29). A bolus
-     * started at second 2 on a pump clock six seconds behind is recorded in the minute before;
-     * one started at second 10 or later is not. The other end keeps a delayed exchange -- a
-     * link that hung for a few seconds -- from carrying the start over into the next minute.
-     */
-    const val BOLUS_WINDOW_FROM_MS = 10_000L
-    const val BOLUS_WINDOW_TO_MS = 50_000L
-
-    /**
-     * How long the periodic cycle may go without reading the bolus history, milliseconds.
-     *
-     * The floor under [app.aaps.pump.atc3.history.Atc3BolusHistoryGate]. Twenty minutes is three or
-     * four status cycles: long enough to take most of the reads away, and short enough that a bolus
-     * given on the keypad, or a record the pump withheld through an alarm, is still found while it
-     * matters.
-     */
-    const val BOLUS_HISTORY_FLOOR_MS = 20 * 60 * 1000L
-
-    /**
      * How stale a Status V1 snapshot may be, milliseconds.
      *
      * The pump answers with a snapshot rather than a reading, up to a minute old, see
@@ -1101,17 +1061,6 @@ object Atc3Const {
      * of step with one another, which is what the reservoir comparison has to allow for.
      */
     const val STATUS_SNAPSHOT_AGE_MS = 60 * 1000L
-
-    /**
-     * How far the books may be out before a bolus without the history being read first, units.
-     *
-     * The read in front of a bolus is what refuses to stack a microbolus on insulin the pump was
-     * given without the loop's knowledge, so it is only skipped while the reservoir agrees with what
-     * the driver expected to within this. A tenth of a unit is four pump steps: wide enough that the
-     * pulse timing of a running basal cannot trip it, narrow enough that a bolus worth refusing over
-     * cannot hide under it.
-     */
-    const val BOLUS_BASELINE_TOLERANCE = 0.1
 
     /** How far back a record may be and still be imported, milliseconds. */
     const val RECONCILE_MAX_AGE_MS = 24 * 60 * 60 * 1000L

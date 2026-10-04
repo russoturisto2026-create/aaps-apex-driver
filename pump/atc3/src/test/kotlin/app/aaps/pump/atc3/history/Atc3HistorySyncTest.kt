@@ -3,6 +3,7 @@ package app.aaps.pump.atc3.history
 import app.aaps.pump.atc3.comm.Atc3FinishedTbr
 import app.aaps.core.data.model.BS
 import app.aaps.core.data.pump.defs.PumpType
+import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.keys.LongNonKey
@@ -10,6 +11,7 @@ import app.aaps.pump.atc3.Atc3Const
 import app.aaps.pump.atc3.Atc3Pump
 import app.aaps.pump.atc3.comm.Atc3BolusRecord
 import app.aaps.core.data.model.TE
+import app.aaps.pump.atc3.keys.Atc3BooleanKey
 import app.aaps.pump.atc3.keys.Atc3LongNonKey
 import app.aaps.pump.atc3.comm.Atc3RefillRecord
 import app.aaps.pump.atc3.comm.Atc3ResponseFrame
@@ -301,9 +303,31 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         sync.reconcileBoluses(listOf(ownRecord(startedAt, 20, shiftMinutes = -1)), 1)
         assertThat(sync.bolusesLearnedAfter(anchoredAt)).isWithin(1e-9).of(0.5)
 
-        // Anchored again after the check that counted it: it is nobody's any more.
+        // Anchored again after the check that counted it: it is not the new interval's. It is kept
+        // all the same while a half hour it lies in may still be closed by the pump's count, which
+        // counts its boluses from a mark of its own, and goes once it is older than that.
+        sync.forgetBolusesLearnedUpTo(now)
+        assertThat(sync.bolusesLearnedAfter(now)).isWithin(1e-9).of(0.0)
+        assertThat(sync.bolusesLearnedAfter(anchoredAt)).isWithin(1e-9).of(0.5)
+        whenever(dateUtil.now()).thenReturn(now + 4 * 60 * 60_000L)
         sync.forgetBolusesLearnedUpTo(now)
         assertThat(sync.bolusesLearnedAfter(anchoredAt)).isWithin(1e-9).of(0.0)
+    }
+
+    @Test
+    fun `a bolus that began before the anchor and was learned after it spoils the anchor`() = runTest {
+        // 2026-10-03 03:52: AAPS was killed while our 2.0 U ran and anchored again on restart, with
+        // part of the bolus already in the pump's count; the bolus was learned after the anchor.
+        afterFirstPass()
+        rowsWritable()
+        val startedAt = now - 30_000L
+        val anchoredAt = now - 20_000L
+        val temporaryId = sync.registerPending(startedAt, 2.0, BS.Type.NORMAL)
+        whenever(dateUtil.now()).thenReturn(now - 10_000L)
+        sync.settleCompleted(temporaryId, 2.0)
+        assertThat(sync.bolusStraddles(anchoredAt, anchoredAt)).isTrue()
+        // An anchor read before the bolus began is a good one.
+        assertThat(sync.bolusStraddles(startedAt - 5_000L, startedAt - 5_000L)).isFalse()
     }
 
     @Test
@@ -818,7 +842,7 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a row closes at the rate it was set at, whatever its minute's records give it`() = runTest {
+    fun `a row closes at its own rate, its start moved by the insulin its minute gives it`() = runTest {
         afterFirstPass()
         val minute = now - 10 * 60_000L
         // The loop's 0.75 U/h acknowledged at :10 of the minute, and a stranger's 3.0 U/h set
@@ -851,12 +875,11 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         )
         sync.tbrStopped(minute + 4 * 60_000L) { listOf(strangerRecord, loopsRecord) }
 
-        // 0.05 own plus 0.05 handed over is what the records give the row, and the row keeps its
-        // 3.0 U/h all the same: the difference is the pump's portions, and the count writes it
-        // into the basal by time. No average rate is ever written.
-        val span = 4 * 60_000L - 10_000L
-        verify(pumpSync, never()).syncTemporaryBasalWithPumpId(
-            eq(minute + 10_000L), eq(0.10 / (span / 3_600_000.0)), any(), any(), any(), any(), any(), any()
+        // 0.05 own plus 0.05 handed over is 120 s of 3.0 U/h; the row keeps 3.0 U/h and its start
+        // moves later, by no more than a minute from where it began.
+        val start = minute + 10_000L + 60_000L
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(start), eq(3.0), eq(minute + 4 * 60_000L - start), eq(true), eq(PumpSync.TemporaryBasalType.NORMAL), any(), any(), any()
         )
     }
 
@@ -866,6 +889,194 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         sync.recordDerivedStop(now - 5 * 60_000L, 3 * 60_000L)
         verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
             eq(now - 5 * 60_000L), eq(0.0), eq(3 * 60_000L), eq(true), eq(PumpSync.TemporaryBasalType.PUMP_SUSPEND), any(), any(), any()
+        )
+    }
+
+    // A bolus answered as delivered while the link was down
+
+    @Test
+    fun `a bolus answered as delivered whole whose record says less is said to be short when the record comes`() = runTest {
+        afterFirstPass()
+        rowsWritable()
+        val startedAt = now - 5 * 60_000L
+        val temporaryId = sync.registerPending(startedAt, 2.0, BS.Type.NORMAL)
+        sync.answeredWhole(temporaryId)
+        assertThat(sync.pendingBolusUnits()).isWithin(1e-9).of(2.0)
+
+        // The pump's record: 2.0 asked, 0.6 delivered (raw steps of 0.025).
+        sync.reconcileBoluses(listOf(ownRecord(startedAt, 80, delivered = 24)), 1)
+
+        verify(uiInteraction, times(1)).addNotification(eq(Notification.PUMP_ERROR), anyOrNull(), eq(Notification.URGENT))
+        assertThat(sync.pendingBolusUnits()).isWithin(1e-9).of(0.0)
+    }
+
+    @Test
+    fun `a bolus answered as delivered whole whose record agrees is not spoken of again`() = runTest {
+        afterFirstPass()
+        rowsWritable()
+        val startedAt = now - 5 * 60_000L
+        val temporaryId = sync.registerPending(startedAt, 2.0, BS.Type.NORMAL)
+        sync.answeredWhole(temporaryId)
+
+        sync.reconcileBoluses(listOf(ownRecord(startedAt, 80)), 1)
+
+        verify(uiInteraction, never()).addNotification(eq(Notification.PUMP_ERROR), anyOrNull(), any())
+    }
+
+    // The basal of a passed half hour by the pump's count
+
+    @Test
+    fun `a passed half hour is one row at what the pump counted, its command rows go and the running one goes on`() = runTest {
+        afterFirstPass()
+        whenever(pumpSync.invalidateTemporaryBasalWithPumpId(any(), any(), any())).thenReturn(true)
+        val start = now - 40 * 60_000L
+        val end = now - 10 * 60_000L
+        // Ours, set five minutes before the watershed, on the pump's stamp twenty seconds before.
+        val ack = end - 5 * 60_000L
+        val stamp = ack - 20_000L
+        sync.tbrStartedByAaps(
+            ackAtMs = ack, rate = 2.0, durationMinutes = 30,
+            pumpStart = Atc3TbrStatus(stamp, Atc3StatusV1.wallClockUtcSeconds(stamp), 2.0, null, 30, 0.0)
+        )
+        val runningId = sync.openTbr()!!.pumpId
+        val rows = listOf(
+            // Begun before the period and reaching into it.
+            Atc3HistorySync.JournalRow(101L, start - 2 * 60_000L, 5 * 60_000L, 0.5, isAbsolute = true, stop = false),
+            // A command of the period.
+            Atc3HistorySync.JournalRow(102L, start + 60_000L, 5 * 60_000L, 1.0, isAbsolute = true, stop = false),
+            Atc3HistorySync.JournalRow(runningId, ack, 30 * 60_000L, 2.0, isAbsolute = true, stop = false)
+        )
+
+        val closed = sync.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = 30 * 60_000L)
+
+        assertThat(closed).isTrue()
+        // The command of the period is taken out, and only it.
+        verify(pumpSync, times(1)).invalidateTemporaryBasalWithPumpId(eq(102L), any(), any())
+        verify(pumpSync, never()).invalidateTemporaryBasalWithPumpId(eq(101L), any(), any())
+        verify(pumpSync, never()).invalidateTemporaryBasalWithPumpId(eq(runningId), any(), any())
+        // The one begun before is cut where the period begins.
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(start - 2 * 60_000L), eq(0.5), eq(2 * 60_000L), eq(true), isNull(), eq(101L), any(), any()
+        )
+        // The running one goes on from the watershed to the end the pump keeps for it.
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(end), eq(2.0), eq(stamp + 30 * 60_000L - end), eq(true), isNull(), eq(runningId), any(), any()
+        )
+        assertThat(sync.openTbr()!!.startedAtMs).isEqualTo(end)
+        // And the period is one row: 0.5 U over half an hour.
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(start), eq(1.0), eq(30 * 60_000L), eq(true), eq(PumpSync.TemporaryBasalType.NORMAL),
+            eq(Atc3PumpId.of(start, Atc3PumpId.KIND_BASAL_FACT)), any(), any()
+        )
+    }
+
+    @Test
+    fun `a row of the period that runs past its end begins there instead of being taken out`() = runTest {
+        afterFirstPass()
+        whenever(pumpSync.invalidateTemporaryBasalWithPumpId(any(), any(), any())).thenReturn(true)
+        val start = now - 40 * 60_000L
+        val end = now - 10 * 60_000L
+        // Closed two seconds after the read the period ends at, by a command of the same tick.
+        val rows = listOf(Atc3HistorySync.JournalRow(103L, end - 4 * 60_000L, 4 * 60_000L + 2_000L, 1.5, isAbsolute = true, stop = false))
+
+        sync.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = null)
+
+        verify(pumpSync, never()).invalidateTemporaryBasalWithPumpId(eq(103L), any(), any())
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(eq(end), eq(1.5), eq(2_000L), eq(true), isNull(), eq(103L), any(), any())
+    }
+
+    @Test
+    fun `a temporary basal begun before the period keeps its time before it and goes on as a row of its own`() = runTest {
+        // The mode switched on while a temporary basal ran, and it is still running at the first
+        // watershed. Moved whole to the period's end, the time it ran before the period would be
+        // gone from AAPS, and counted there as the scheduled rate.
+        afterFirstPass()
+        whenever(pumpSync.invalidateTemporaryBasalWithPumpId(any(), any(), any())).thenReturn(true)
+        val start = now - 40 * 60_000L
+        val end = now - 10 * 60_000L
+        val ack = start - 8 * 60_000L
+        val stamp = ack - 20_000L
+        sync.tbrStartedByAaps(
+            ackAtMs = ack, rate = 2.0, durationMinutes = 60,
+            pumpStart = Atc3TbrStatus(stamp, Atc3StatusV1.wallClockUtcSeconds(stamp), 2.0, null, 60, 0.0)
+        )
+        val runningId = sync.openTbr()!!.pumpId
+        val rows = listOf(Atc3HistorySync.JournalRow(runningId, ack, 60 * 60_000L, 2.0, isAbsolute = true, stop = false))
+
+        assertThat(sync.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = 60 * 60_000L)).isTrue()
+
+        verify(pumpSync, never()).invalidateTemporaryBasalWithPumpId(eq(runningId), any(), any())
+        // Its row ends where the period begins.
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(ack), eq(2.0), eq(8 * 60_000L), eq(true), isNull(), eq(runningId), any(), any()
+        )
+        // And it goes on from the period's end under an id of its own, to the end the pump keeps for it.
+        val goesOnId = Atc3PumpId.tbrStartAfter(end, runningId)
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(end), eq(2.0), eq(stamp + 60 * 60_000L - end), eq(true), eq(PumpSync.TemporaryBasalType.NORMAL), eq(goesOnId), any(), any()
+        )
+        assertThat(sync.openTbr()!!.pumpId).isEqualTo(goesOnId)
+        assertThat(sync.openTbr()!!.startedAtMs).isEqualTo(end)
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(start), eq(1.0), eq(30 * 60_000L), eq(true), eq(PumpSync.TemporaryBasalType.NORMAL),
+            eq(Atc3PumpId.of(start, Atc3PumpId.KIND_BASAL_FACT)), any(), any()
+        )
+    }
+
+    @Test
+    fun `a period closed again takes a row of its own and the one written before is taken out`() = runTest {
+        afterFirstPass()
+        whenever(pumpSync.invalidateTemporaryBasalWithPumpId(any(), any(), any())).thenReturn(true)
+        val start = now - 40 * 60_000L
+        val end = now - 5 * 60_000L
+
+        sync.writeBasalFact(start, end, units = 0.7, rows = emptyList(), pumpTbrDurationMs = null, write = 1)
+
+        verify(pumpSync, times(1)).invalidateTemporaryBasalWithPumpId(eq(Atc3PumpId.of(start, Atc3PumpId.KIND_BASAL_FACT)), any(), any())
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(start), any(), eq(35 * 60_000L), eq(true), eq(PumpSync.TemporaryBasalType.NORMAL),
+            eq(Atc3PumpId.of(start, Atc3PumpId.KIND_BASAL_FACT, 1)), any(), any()
+        )
+    }
+
+    @Test
+    fun `a period is not closed while our own running row is not yet known under the pump's start`() = runTest {
+        afterFirstPass()
+        val start = now - 40 * 60_000L
+        val end = now - 10 * 60_000L
+        sync.tbrStartedByAaps(ackAtMs = end - 60_000L, rate = 2.0, durationMinutes = 30)
+
+        assertThat(sync.writeBasalFact(start, end, units = 0.5, rows = emptyList(), pumpTbrDurationMs = 30 * 60_000L)).isFalse()
+
+        verify(pumpSync, never()).syncTemporaryBasalWithPumpId(eq(start), any(), any(), any(), anyOrNull(), any(), any(), any())
+    }
+
+    @Test
+    fun `in the exact mode nothing is written into a closed half hour`() = runTest {
+        afterFirstPass()
+        val closedBefore = now - 10 * 60_000L
+        whenever(preferences.get(Atc3BooleanKey.ExactBasal)).thenReturn(true)
+        whenever(preferences.get(Atc3StringNonKey.BasalPeriod))
+            .thenReturn(Atc3BasalPeriod.State(Atc3BasalPeriod.Mark(closedBefore, 20.0, closedBefore)).encode())
+
+        // A stop the pump dates a minute before the period closed begins where it closed.
+        sync.onStatus(suspended = true, tbrRunning = false, rate = 0.0, durationMs = null, pumpTbrStart = null, pausedAtMs = closedBefore - 60_000L)
+        verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
+            eq(closedBefore), eq(0.0), any(), eq(true), eq(PumpSync.TemporaryBasalType.PUMP_SUSPEND), any(), any(), any()
+        )
+        verify(pumpSync, never()).syncTemporaryBasalWithPumpId(
+            eq(closedBefore - 60_000L), any(), any(), any(), anyOrNull(), any(), any(), any()
+        )
+
+        // And its end, dated inside the closed period too, is kept past it: AAPS ends whatever
+        // row runs at the moment it is given, which there is the period's own.
+        sync.onStatus(suspended = false, tbrRunning = false, rate = 0.0, durationMs = null, pumpTbrStart = null, resumedAtMs = closedBefore - 30_000L)
+        verify(pumpSync, times(1)).syncStopTemporaryBasalWithPumpId(eq(closedBefore + 1_000L), any(), any(), any(), any())
+
+        // A stop that lies wholly inside is in the pump's count already.
+        sync.recordDerivedStop(closedBefore - 5 * 60_000L, 3 * 60_000L)
+        verify(pumpSync, never()).syncTemporaryBasalWithPumpId(
+            any(), eq(0.0), eq(3 * 60_000L), any(), anyOrNull(), any(), any(), any()
         )
     }
 }

@@ -1,7 +1,5 @@
 package app.aaps.pump.atc3.history
 
-import java.util.Calendar
-
 /**
  * What the AAPS journal counts as delivered over an interval, worked out the way AAPS itself does.
  *
@@ -129,16 +127,7 @@ object Atc3JournalArithmetic {
     }
 
     /** The first half hour boundary strictly after [ms], on the local calendar. */
-    private fun nextHalfHour(ms: Long): Long {
-        val calendar = Calendar.getInstance().apply {
-            timeInMillis = ms
-            set(Calendar.MILLISECOND, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MINUTE, if (get(Calendar.MINUTE) < 30) 0 else 30)
-        }
-        calendar.add(Calendar.MINUTE, 30)
-        return calendar.timeInMillis
-    }
+    private fun nextHalfHour(ms: Long): Long = Atc3DayClock.halfHourOf(ms) + Atc3DayClock.HALF_HOUR_MS
 
     private const val HOUR_MS = 3_600_000.0
 }

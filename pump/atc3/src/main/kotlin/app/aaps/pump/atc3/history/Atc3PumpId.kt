@@ -22,8 +22,8 @@ object Atc3PumpId {
     /** A pending bolus settled without the pump ever writing a record for it. */
     const val KIND_RETRACTION = 3L
 
-    /** A row the driver wrote to carry the difference between the pump's count and the journal. */
-    const val KIND_BASAL_CORRECTION = 4L
+    /** The basal of a passed half hour by the pump's count, see [Atc3BasalPeriod]. */
+    const val KIND_BASAL_FACT = 4L
 
     /** How far an id may be bumped away from a second another record already holds. */
     const val MAX_BUMP = 9

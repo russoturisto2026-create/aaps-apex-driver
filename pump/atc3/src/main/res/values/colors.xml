@@ -17,5 +17,4 @@
          two circles side by side read as two different measurements. -->
     <color name="atc3_halo_battery">#7BE9A8</color>
     <color name="atc3_halo_warn">#FFCB55</color>
-    <color name="atc3_halo_danger">#FF7066</color>
 </resources>

@@ -1,10 +1,10 @@
 package app.aaps.pump.atc3.history
 
+import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.TB
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.profile.ProfileFunction
 import app.aaps.pump.atc3.Atc3Pump
-import java.util.Calendar
 import java.util.TreeMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -68,7 +68,7 @@ class Atc3AapsJournal @Inject constructor(
         var cursor = fromMs
         while (cursor < toMs) {
             scheduled[cursor] = profileFunction.getProfile(cursor)?.getBasal(cursor) ?: 0.0
-            cursor = halfHourOf(cursor + HALF_HOUR_MS)
+            cursor = Atc3DayClock.halfHourOf(cursor + Atc3DayClock.HALF_HOUR_MS)
         }
 
         // A profile switched on inside the interval is the other way the rate changes, and the pump
@@ -100,38 +100,35 @@ class Atc3AapsJournal @Inject constructor(
     }
 
     /**
-     * This pump's temporary basal rows over `[fromMs, toMs)`, as [Atc3BasalCorrection] edits them.
-     * Only a row set at a rate is editable: a stop's time is the pump's own fact, and a percentage
-     * row has no rate of its own to keep.
+     * What the journal accounts for since the pump's midnight at [dayStartMs], for setting beside the
+     * pump's count of the day on the driver's screen. Here the boluses are taken by their rows: over
+     * a whole day the minute a row is stamped on does not matter, as it does between two reads.
      */
-    fun rowsForCorrection(fromMs: Long, toMs: Long): List<Atc3BasalCorrection.Row> {
+    suspend fun insulinOfDay(dayStartMs: Long, toMs: Long): Atc3JournalArithmetic.Breakdown? {
         val serial = atc3Pump.serialNumber
-        return persistenceLayer.getTemporaryBasalsActiveBetweenTimeAndTime(fromMs, toMs)
-            .filter { it.isValid && it.ids.pumpSerial == serial }
-            .map {
-                val rate = if (it.isAbsolute) it.rate else (profileFunction.getProfile(it.timestamp)?.getBasal(it.timestamp) ?: 0.0) * it.rate / 100.0
-                Atc3BasalCorrection.Row(
-                    pumpId = it.ids.pumpId ?: 0L,
-                    startMs = it.timestamp,
-                    endMs = it.end,
-                    rateUnitsPerHour = rate,
-                    editable = it.isAbsolute && it.ids.pumpId != null && it.type == TB.Type.NORMAL
-                )
-            }
+        val boluses = persistenceLayer.getBolusesFromTimeToTime(dayStartMs, toMs, true)
+            .filter { it.isValid && it.ids.pumpSerial == serial && it.type != BS.Type.PRIMING }
+            .sumOf { it.amount }
+        return insulinBetween(dayStartMs, toMs, boluses)
     }
 
-    /** The profile's rate at [atMs], or zero when no profile runs there. */
-    fun profileRateAt(atMs: Long): Double = profileFunction.getProfile(atMs)?.getBasal(atMs) ?: 0.0
-
-    private fun halfHourOf(ms: Long): Long = Calendar.getInstance().apply {
-        timeInMillis = ms
-        set(Calendar.MILLISECOND, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MINUTE, if (get(Calendar.MINUTE) < 30) 0 else 30)
-    }.timeInMillis
-
-    private companion object {
-
-        const val HALF_HOUR_MS = 30 * 60_000L
+    /**
+     * The temporary basal rows AAPS holds of this pump that run anywhere in `[fromMs, toMs)`, for
+     * closing that stretch by the pump's count, see [Atc3HistorySync.writeBasalFact].
+     */
+    suspend fun rowsBetween(fromMs: Long, toMs: Long): List<Atc3HistorySync.JournalRow> {
+        val serial = atc3Pump.serialNumber
+        return persistenceLayer.getTemporaryBasalsActiveBetweenTimeAndTime(fromMs, toMs)
+            .filter { it.isValid && it.ids.pumpSerial == serial && it.timestamp < toMs }
+            .map {
+                Atc3HistorySync.JournalRow(
+                    pumpId = it.ids.pumpId,
+                    timestamp = it.timestamp,
+                    durationMs = it.duration,
+                    rate = it.rate,
+                    isAbsolute = it.isAbsolute,
+                    stop = it.type == TB.Type.PUMP_SUSPEND
+                )
+            }
     }
 }

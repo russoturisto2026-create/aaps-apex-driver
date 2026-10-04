@@ -1,7 +1,6 @@
 package app.aaps.pump.atc3.history
 
 import app.aaps.pump.atc3.Atc3Const
-import java.util.Calendar
 import kotlin.math.abs
 
 /**
@@ -10,32 +9,29 @@ import kotlin.math.abs
  * Every tick reads Status V1, and Status V1 carries the pump's count of insulin delivered today,
  * basal and bolus together. That count is the pump's side. The AAPS side is what the rows AAPS
  * holds — boluses, temporary basals, the scheduled rate in between — add up to over the same
- * interval, worked out by [Atc3JournalArithmetic]. The difference between the two is a running
- * account: the pump delivers in portions on a grid of its own, restarts its profile count on every
- * half hour and rounds every temporary basal to its portions, so the journal, which counts a rate
- * over its time, always sits some part of a portion off. Inside the tolerance that is left alone;
- * beyond it the caller first reads the pump's journals for anything AAPS is missing and then writes
- * what is left into the rows, see [Atc3BasalCorrection].
+ * interval, worked out by [Atc3JournalArithmetic]. While the two agree to within the tolerance the
+ * journal is the pump's; when they do not, something the pump did is not in AAPS as the pump did
+ * it, and the pump's journals are read to put it there.
  *
  * **The interval runs from the anchor to the read.** The count is live: it moves with every pulse
  * while the snapshot time beside it stays on its minute, so it belongs to the moment it was read.
- * The anchor is the read the comparison was last started from, and it stays where it is: the
- * journal counts a rate over its time and the pump delivers it in steps, so each row sits a part of
- * a step from the count, and only the sum over the whole distance says what the journal owes. The reservoir takes no part: it and the counter do
+ * The anchor is the read the comparison was last started from, and it stays where it is while the
+ * two sides agree: the journal counts a rate over its time and the pump delivers it in steps, so
+ * each row sits a part of a step from the count, and only the sum over the whole distance says
+ * whether that is all there is between them. The reservoir takes no part: it and the counter do
  * not move in step, one or two steps apart either way.
  *
- * **The tolerance is the caller's**, what the pump delivers in a minute at the highest basal rate it
- * is set to allow.
+ * **The tolerance is the caller's**, what the pump can deliver in one go at the highest basal rate
+ * it is set to allow. Anything beyond it is a mistake or somebody else's hand.
  *
- * **A difference that stays is looked into.** One that sits on the same side for [STUCK_READS]
- * reads running, more than [STUCK_UNITS] out, can be a small bolus somebody gave between two reads,
- * so it is reported as a difference and the caller reads the journals; [lookedInto] then starts the
- * count of reads over.
+ * **A difference that stays is one too.** The steps of delivery push the two sides apart now one
+ * way and now the other, so a difference inside the tolerance comes back by itself. One that sits
+ * on the same side for [STUCK_READS] reads running, more than [STUCK_UNITS] out, is not that: it is
+ * something that began and ended between two reads, and it is reported as a disagreement.
  *
- * **The difference is carried, never dropped.** A new anchor -- the pump's midnight, when the count
- * starts again from nothing, or a clock write -- starts from the difference the last comparison
- * found, [lastDifference], so that what the journal still owes is not lost with the old anchor.
- * The anchor itself lives in memory: a restart of AAPS starts the account afresh.
+ * **The anchor outlives a restart.** The caller keeps it on disk, [encode] and [restore]. A new pump
+ * and the pump's midnight -- the count starts again from nothing -- leave the check with nothing to
+ * compare against, which the caller answers by reading everything and accepting.
  *
  * **This class decides nothing.** It says whether the two sides agree and by how much they do not.
  * What to read and what to correct belongs to the caller.
@@ -59,12 +55,11 @@ class Atc3StateCheck {
         data object Unknown : Verdict
 
         /**
-         * The pump counted [units] more than the journal accounts for, beyond the tolerance or
-         * for too many reads on one side.
+         * The pump counted [units] more than the journal accounts for, beyond one step.
          *
-         * Positive: the pump delivered more than AAPS holds -- its portions running ahead of the
-         * journal's rate, or a stranger's bolus. Negative: AAPS holds more than went in -- its
-         * portions running behind, a pause it did not see, or the pump not delivering at all.
+         * Positive: the pump delivered insulin AAPS does not hold — a stranger's bolus or a
+         * temporary basal above what AAPS has. Negative: AAPS holds more than went in — a pause it
+         * did not see, a temporary basal below what it has, or the pump not delivering at all.
          */
         data class Differs(val units: Double) : Verdict
     }
@@ -78,7 +73,7 @@ class Atc3StateCheck {
      *   or its record, a stranger's on its import -- and the pump's count holds it by then, which
      *   no time on a bolus row can promise, see [app.aaps.pump.atc3.history.Atc3HistorySync.bolusesLearnedAfter].
      */
-    data class Baseline(val readMs: Long, val counterUnits: Double, val learnedAfterMs: Long = readMs, val carriedUnits: Double = 0.0)
+    data class Baseline(val readMs: Long, val counterUnits: Double, val learnedAfterMs: Long = readMs)
 
     private var baseline: Baseline? = null
 
@@ -91,8 +86,8 @@ class Atc3StateCheck {
     private var lastCounterUnits: Double? = null
     private var lastAapsUnits: Double = 0.0
 
-    /** The difference the last comparison found, carried into the next anchor; null before any. */
-    private var lastDifference: Double? = null
+    /** How many comparisons in a row ended unexplained after the journals were read. */
+    private var unexplainedRuns: Int = 0
 
     /** Consecutive reads where the journal owed a step of insulin and the count did not move. */
     private var motionlessSamples: Int = 0
@@ -108,7 +103,7 @@ class Atc3StateCheck {
     @Synchronized
     fun baselineFor(readMs: Long, counterUnits: Double): Baseline? {
         val base = baseline ?: return null
-        if (!sameDay(base.readMs, readMs) || readMs < base.readMs || counterUnits + PULSE_EPSILON < base.counterUnits) {
+        if (!Atc3DayClock.sameDay(base.readMs, readMs) || readMs < base.readMs || counterUnits + PULSE_EPSILON < base.counterUnits) {
             baseline = null
             return null
         }
@@ -124,8 +119,7 @@ class Atc3StateCheck {
     @Synchronized
     fun compare(base: Baseline, readMs: Long, counterUnits: Double, aapsUnits: Double, toleranceUnits: Double): Verdict {
         noteMotion(readMs, base, counterUnits, aapsUnits)
-        val difference = base.carriedUnits + counterUnits - base.counterUnits - aapsUnits
-        lastDifference = difference
+        val difference = counterUnits - base.counterUnits - aapsUnits
         noteSide(readMs, difference)
         val agrees = abs(difference) <= toleranceUnits + PULSE_EPSILON && stuckReads < STUCK_READS
         return if (agrees) Verdict.Matches else Verdict.Differs(difference)
@@ -144,35 +138,25 @@ class Atc3StateCheck {
     @Synchronized
     fun stuckReads(): Int = stuckReads
 
-    /** The journals were read for a difference that stayed: the reads running are counted afresh. */
-    @Synchronized
-    fun lookedInto() {
-        stuckReads = 0
-        stuckSide = 0
-    }
-
-    /** What the last comparison found the pump to have counted beyond the journal, or null. */
-    @Synchronized
-    fun lastDifference(): Double? = lastDifference
-
     /**
-     * This read is the anchor from now on, because there was none to compare against.
-     *
-     * @param carriedUnits what the journal still owed at the last comparison, see [lastDifference]
+     * This read is the anchor from now on: there was none, or the journals have been read and
+     * AAPS brought to what they say.
      */
     @Synchronized
-    fun accept(readMs: Long, counterUnits: Double, learnedAfterMs: Long = readMs, carriedUnits: Double = 0.0) {
-        baseline = Baseline(readMs, counterUnits, learnedAfterMs, carriedUnits)
+    fun accept(readMs: Long, counterUnits: Double, learnedAfterMs: Long = readMs) {
+        baseline = Baseline(readMs, counterUnits, learnedAfterMs)
         stuckReads = 0
         stuckSide = 0
         lastCounterUnits = null
         lastAapsUnits = 0.0
+        unexplainedRuns = 0
     }
 
-    /**
-     * Nothing to compare against any more: the pump's clock was written. The difference found last
-     * is kept, for the next anchor to carry.
-     */
+    /** The journals were read and the two sides still disagree. @return how many times in a row */
+    @Synchronized
+    fun unexplained(): Int = ++unexplainedRuns
+
+    /** Nothing known any more: the pump changed, or its clock was written. */
     @Synchronized
     fun forget() {
         baseline = null
@@ -181,10 +165,34 @@ class Atc3StateCheck {
         lastCounterUnits = null
         lastAapsUnits = 0.0
         motionlessSamples = 0
+        unexplainedRuns = 0
     }
 
     @Synchronized
     fun baseline(): Baseline? = baseline
+
+    /** The anchor as one line for storage, empty when there is none. See [restore]. */
+    @Synchronized
+    fun encode(): String = baseline?.let { "${it.readMs};${it.counterUnits};${it.learnedAfterMs}" } ?: ""
+
+    /**
+     * Take back an anchor stored by [encode], when there is none in memory: after a restart the
+     * account goes on from where it stood. [baselineFor] still drops it on the next read when the
+     * pump's midnight or a count that went backwards came between.
+     */
+    @Synchronized
+    fun restore(text: String): Boolean {
+        if (baseline != null) return false
+        val parts = text.split(';')
+        val readMs = parts.getOrNull(0)?.toLongOrNull() ?: return false
+        val counter = parts.getOrNull(1)?.toDoubleOrNull() ?: return false
+        val learnedAfterMs = parts.getOrNull(2)?.toLongOrNull() ?: readMs
+        baseline = Baseline(readMs, counter, learnedAfterMs)
+        return true
+    }
+
+    @Synchronized
+    fun unexplainedRuns(): Int = unexplainedRuns
 
     /**
      * True when the journal has owed insulin and the pump has counted none for two reads
@@ -211,12 +219,6 @@ class Atc3StateCheck {
         }
         if (owed < Atc3Const.DOSE_SCALE) return
         motionlessSamples++
-    }
-
-    private fun sameDay(a: Long, b: Long): Boolean {
-        val x = Calendar.getInstance().apply { timeInMillis = a }
-        val y = Calendar.getInstance().apply { timeInMillis = b }
-        return x.get(Calendar.YEAR) == y.get(Calendar.YEAR) && x.get(Calendar.DAY_OF_YEAR) == y.get(Calendar.DAY_OF_YEAR)
     }
 
     companion object {

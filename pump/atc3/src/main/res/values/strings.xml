@@ -12,14 +12,12 @@
 
     <string name="atc3_not_supported_extended_bolus">Apex driver does not support extended boluses</string>
     <string name="atc3_not_supported_percent_tbr">Apex driver does not support percentage temp basals</string>
-    <string name="atc3_not_implemented">Apex driver does not implement this operation yet</string>
     <string name="atc3_not_connected">Apex pump is not connected</string>
     <string name="atc3_refused_by_pump">Pump refused the command. Check the limits set on the pump.</string>
     <string name="atc3_alarm_stop_locked">The pump is delivering nothing under its alarm and is locked, so it cannot be stopped from here. Unlock the pump and stop it.</string>
     <string name="atc3_no_delivery">The pump reports that it is delivering, but the reservoir has not moved. Check the pump and the infusion set.</string>
     <string name="atc3_command_data_changed">The pump records changed what AAPS knew; the loop will decide again on the corrected data</string>
-    <string name="atc3_basal_critical">The pump counted %1$+.3f U against the AAPS journal, more than the pump\'s delivery steps can explain. The loop is stopped. Check the pump.</string>
-    <string name="atc3_basal_critical_loop_blocked">The pump\'s delivered insulin and the AAPS journal are too far apart. The loop is stopped until they agree.</string>
+    <string name="atc3_journal_unexplained">The pump counted %1$.3f U more than the AAPS journal accounts for, and its journals do not explain it. Check the pump.</string>
     <string name="atc3_bolus_unconfirmed_dropped">The pump recorded a later bolus but never the bolus of %1$.2f U. It has been zeroed in AAPS. Check the pump to see whether the insulin was delivered.</string>
     <string name="atc3_no_delivery_loop_blocked">The pump is not delivering the insulin it reports. The loop is stopped until the pump has been checked.</string>
     <string name="atc3_firmware_too_old">Pump firmware %1$s is older than %2$s and is not safe: it has no Bluetooth password, so anything within radio range can control the pump. AAPS will not use this pump. Contact the distributor and have the firmware updated.</string>
@@ -130,6 +128,9 @@
 
     <string name="atc3_trace_title">Write the driver trace</string>
     <string name="atc3_trace_summary">One line per event in the AAPS log, for measuring how often the pump is contacted and in what order things happen</string>
+    <string name="atc3_half_hour_read">Apex: reading the pump\'s count at the half hour</string>
+    <string name="atc3_exact_basal_title">Record basal as delivered</string>
+    <string name="atc3_exact_basal_summary">Off: temporary basals stay in the history as they were ordered. On: every passed half hour is written as one basal record at the rate the pump\'s own delivery count gives it, in place of the records of the commands, so that insulin on board follows what was actually delivered.</string>
     <string name="atc3_hold_link_title">Keep the pump connection open</string>
     <string name="atc3_hold_link_summary">Stay connected between exchanges instead of reconnecting every few minutes. The pump sends a signal every three minutes, and the connection is dropped and rebuilt if that stops arriving. Turn this off only if the connection proves unreliable on this phone.</string>
     <string name="atc3_password_given_up">The pump refused the Bluetooth password ten times, so the driver has stopped trying. Read the current B/P from the pump status screen and enter it in the Apex settings.</string>
@@ -152,6 +153,11 @@
 
     <string name="atc3_halo_password_random">Random</string>
 
+    <string name="atc3_halo_exact_basal_caption">Every passed half hour as one record at what the pump counted, in place of the commands</string>
+    <string name="atc3_halo_hold_link_caption">Stay connected between exchanges instead of reconnecting each time</string>
+    <string name="atc3_halo_day_account_label">Delivered today: AAPS and the pump</string>
+    <string name="atc3_halo_day_account_value">AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
+    <string name="atc3_halo_day_account_none">not compared yet</string>
     <string name="atc3_halo_trace_label">Driver trace</string>
     <string name="atc3_halo_trace_caption">Machine readable log for bench captures, off unless one is being taken</string>
 

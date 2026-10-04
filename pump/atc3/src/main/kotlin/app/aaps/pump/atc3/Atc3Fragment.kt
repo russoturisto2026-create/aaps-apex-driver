@@ -47,7 +47,6 @@ import app.aaps.pump.atc3.manager.Atc3SetSuspended
 import app.aaps.pump.atc3.manager.Atc3WriteSettings
 import app.aaps.pump.atc3.ui.Atc3ScanActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.switchmaterial.SwitchMaterial
 import dagger.android.support.DaggerFragment
 import io.reactivex.rxjava3.core.Single
 import io.reactivex.rxjava3.disposables.CompositeDisposable
@@ -304,7 +303,25 @@ class Atc3Fragment : DaggerFragment() {
         updateMetrics(binding)
         updateDeliveryState(binding)
         updateSettingsRows(binding)
+        updateDayAccount(binding)
         updateSaveBar(binding)
+    }
+
+    /**
+     * The day so far by the AAPS journal and by the pump's own count, and how far apart they sit.
+     *
+     * The journal's sum is rates over time and comes out between the pump's steps; it is shown on
+     * the nearest step, so that the difference is one the pump could have delivered or not, and a
+     * thousandth of a unit is not shown as one.
+     */
+    private fun updateDayAccount(binding: Atc3FragmentBinding) {
+        val day = atc3Pump.dayAccount
+        binding.atc3ScreenStatus.atc3DayAccountValue.text =
+            if (day == null) rh.gs(R.string.atc3_halo_day_account_none)
+            else {
+                val aapsUnits = Math.round(day.aapsUnits / Atc3Const.DOSE_SCALE) * Atc3Const.DOSE_SCALE
+                rh.gs(R.string.atc3_halo_day_account_value, aapsUnits, day.pumpUnits, day.pumpUnits - aapsUnits)
+            }
     }
 
     private fun updateConnectionCard(binding: Atc3FragmentBinding) {
@@ -525,10 +542,10 @@ class Atc3Fragment : DaggerFragment() {
         val rows = binding?.atc3ScreenStatus ?: return
 
         rows.atc3MaxBolusPicker.prepare(0.0, 30.0, Atc3Const.DOSE_SCALE, "0.000")
-        rows.atc3MaxBolusPicker.onEdited { base, value -> base.withMaxBolus(value) }
+        rows.atc3MaxBolusPicker.onDoseEdited({ it.maxBolus }) { base, value -> base.withMaxBolus(value) }
 
         rows.atc3MaxBasalPicker.prepare(0.0, PumpType.ATC3.baseBasalMaxValue() ?: 25.0, Atc3Const.DOSE_SCALE, "0.000")
-        rows.atc3MaxBasalPicker.onEdited { base, value -> base.withMaxBasal(value) }
+        rows.atc3MaxBasalPicker.onDoseEdited({ it.maxBasal }) { base, value -> base.withMaxBasal(value) }
 
         rows.atc3RowBolusSpeed.setOnClickListener {
             val base = shownSettings() ?: return@setOnClickListener
@@ -541,6 +558,10 @@ class Atc3Fragment : DaggerFragment() {
             )
         }
         rows.atc3RowPassword.setOnClickListener { showPasswordDialog() }
+        rows.atc3ExactBasalSwitch.isChecked = preferences.get(Atc3BooleanKey.ExactBasal)
+        rows.atc3ExactBasalSwitch.setOnCheckedChangeListener { _, on -> preferences.put(Atc3BooleanKey.ExactBasal, on) }
+        rows.atc3HoldLinkSwitch.isChecked = preferences.get(Atc3BooleanKey.HoldLink)
+        rows.atc3HoldLinkSwitch.setOnCheckedChangeListener { _, on -> preferences.put(Atc3BooleanKey.HoldLink, on) }
         rows.atc3TraceSwitch.isChecked = preferences.get(Atc3BooleanKey.Trace)
         rows.atc3TraceSwitch.setOnCheckedChangeListener { _, on -> preferences.put(Atc3BooleanKey.Trace, on) }
     }
@@ -572,8 +593,8 @@ class Atc3Fragment : DaggerFragment() {
         rows.atc3RowBolusSpeed.setRowEnabled(editable)
 
         settings ?: return
-        rows.atc3MaxBolusPicker.showValue(settings.maxBolus)
-        rows.atc3MaxBasalPicker.showValue(settings.maxBasal)
+        rows.atc3MaxBolusPicker.showDose(settings.maxBolus)
+        rows.atc3MaxBasalPicker.showDose(settings.maxBasal)
         rows.atc3BolusSpeedValue.text =
             rh.gs(if (settings.lowBolusSpeed) R.string.atc3_halo_bolus_speed_low else R.string.atc3_halo_bolus_speed_normal)
     }
@@ -697,22 +718,44 @@ class Atc3Fragment : DaggerFragment() {
         setParams(min, min, max, step, DecimalFormat(pattern), true, null)
     }
 
-    private fun NumberPicker.onEdited(change: (Atc3Settings, Double) -> Atc3Settings) {
+    /**
+     * What a change in a field that holds an amount of insulin does. The field is kept to the pump's
+     * own scale of amounts, [Atc3DoseGrid]: a press of a button moves to the next amount on that
+     * scale in its direction, and a number typed by hand goes to the nearest one.
+     *
+     * @param current the value the field stands for, as the settings shown hold it
+     */
+    private fun NumberPicker.onDoseEdited(current: (Atc3Settings) -> Double, change: (Atc3Settings, Double) -> Atc3Settings) {
         setOnValueChangedListener { value ->
             if (loading) return@setOnValueChangedListener
-            edit { base -> change(base, value.coerceIn(minValue, maxValue)) }
+            val before = shownSettings()?.let(current) ?: return@setOnValueChangedListener
+            val raw = value.coerceIn(minValue, maxValue)
+            val oneStep = abs(raw - before) <= step + SNAP_TOLERANCE
+            val onScale = when {
+                oneStep && raw > before -> Atc3DoseGrid.up(raw)
+                oneStep && raw < before -> Atc3DoseGrid.down(raw)
+                else                    -> Atc3DoseGrid.nearest(raw)
+            }.coerceIn(minValue, maxValue)
+            edit { base -> change(base, onScale) }
         }
     }
 
-    private fun SwitchMaterial.onToggled(change: (Atc3Settings, Boolean) -> Atc3Settings) {
-        setOnCheckedChangeListener { _, checked ->
-            if (loading) return@setOnCheckedChangeListener
-            if (shownSettings() == null) {
-                showChecked(!checked)
-                return@setOnCheckedChangeListener
-            }
-            edit { base -> change(base, checked) }
+    /**
+     * Put an amount of insulin into its picker, with the step and the decimals the pump's scale
+     * has at that amount.
+     */
+    private fun NumberPicker.showDose(value: Double) {
+        if (hasFocus()) return
+        step = Atc3DoseGrid.stepBelow(value)
+        val pattern = Atc3DoseGrid.pattern(value)
+        if ((formatter as? DecimalFormat)?.toPattern() != pattern) {
+            formatter = DecimalFormat(pattern)
+            // Shown again even when the number has not changed: its decimals have.
+            loading = true
+            this.value = value
+            loading = false
         }
+        showValue(value)
     }
 
     /** Put a value into a picker, leaving a field the user is in the middle of typing alone. */
@@ -725,13 +768,6 @@ class Atc3Fragment : DaggerFragment() {
         if (abs(value - currentValue) <= SNAP_TOLERANCE) return
         loading = true
         this.value = value
-        loading = false
-    }
-
-    private fun SwitchMaterial.showChecked(checked: Boolean) {
-        if (isChecked == checked) return
-        loading = true
-        isChecked = checked
         loading = false
     }
 

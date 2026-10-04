@@ -345,9 +345,9 @@ data class Atc3HistoryLedger(
         copy(ourTbrs = ourTbrs.map { if (it.pumpId == pumpId) it.copy(carriedUnits = units) else it })
 
     /** The row under [pumpId] has been shaped to [units] of insulin over its span. */
-    fun withOurTbrShaped(pumpId: Long, units: Double, endMs: Long? = null) =
+    fun withOurTbrShaped(pumpId: Long, units: Double, endMs: Long? = null, rowMs: Long? = null) =
         copy(ourTbrs = ourTbrs.map {
-            if (it.pumpId == pumpId) it.copy(shapedUnits = units, endMs = endMs ?: it.endMs) else it
+            if (it.pumpId == pumpId) it.copy(shapedUnits = units, endMs = endMs ?: it.endMs, rowMs = rowMs ?: it.rowMs) else it
         })
 
     /** The note written under [pumpId] now holds the pump's own start, and AAPS's record carries it. */
@@ -355,6 +355,10 @@ data class Atc3HistoryLedger(
         copy(ourTbrs = ourTbrs.map {
             if (it.pumpId == pumpId) it.copy(startUtcSeconds = utcSeconds, pumpStart = true, rowMs = rowMs ?: it.rowMs) else it
         })
+
+    /** AAPS's record written under [pumpId] now begins at [rowMs]: the part before it went into a closed half hour. */
+    fun withOurTbrRow(pumpId: Long, rowMs: Long) =
+        copy(ourTbrs = ourTbrs.map { if (it.pumpId == pumpId) it.copy(rowMs = rowMs) else it })
 
     /**
      * AAPS's record written under [pumpId] was closed at [endMs].

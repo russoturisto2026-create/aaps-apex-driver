@@ -18,30 +18,6 @@ class Atc3BolusSpacingTest {
     private val minute = Atc3Const.BOLUS_SPACING_MS
     private val now = 1_700_000_000_000L
 
-    /** A moment at the given second of some minute. */
-    private fun atSecond(s: Double): Long = 1_700_000_040_000L + (s * 1000).toLong()  // ..040_000 is a whole minute
-
-    @Test
-    fun `inside the delivery window nothing is waited for`() {
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(10.0))).isEqualTo(0L)
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(30.0))).isEqualTo(0L)
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(50.0))).isEqualTo(0L)
-    }
-
-    @Test
-    fun `the first seconds of a minute wait for the tenth`() {
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(0.0))).isEqualTo(10 * second)
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(2.0))).isEqualTo(8 * second)
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(9.5))).isEqualTo(500L)
-    }
-
-    @Test
-    fun `the last seconds of a minute wait for the tenth of the next`() {
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(50.5))).isEqualTo(19_500L)
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(55.0))).isEqualTo(15 * second)
-        assertThat(Atc3BolusSpacing.windowWaitMs(atSecond(59.999))).isEqualTo(10_001L)
-    }
-
     @Test
     fun `the first bolus of a session waits for nothing`() {
         // Nothing has been given, so there is no record for the next one to be confused with.

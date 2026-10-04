@@ -45,6 +45,15 @@ class Atc3Pump @Inject constructor() {
      */
     var deliveredTodayUnits: Double = 0.0
 
+    /**
+     * The day so far by both accounts, as of the last tick: what the AAPS journal adds up to since
+     * the pump's midnight -- its boluses, its temporary basals, the scheduled rate in between --
+     * and what the pump's own count says. For the driver's screen; null until compared once.
+     */
+    data class DayAccount(val aapsUnits: Double, val pumpUnits: Double, val atMs: Long)
+
+    var dayAccount: DayAccount? = null
+
     /** Hour and minute of the last explicit stop, or null when the pump reports none. */
     var lastStop: Atc3StatusV1.LastStop? = null
 

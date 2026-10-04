@@ -564,6 +564,50 @@
             </LinearLayout>
         </LinearLayout>
 
+        <!-- Basal of a passed half hour by the pump's count, Atc3BooleanKey.ExactBasal. A plain switch, not a settings draft field. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_exact_basal"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_exact_basal_title" />
+
+                <TextView style="@style/ATC3.Halo.Caption.Faint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_exact_basal_caption" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/atc3_exact_basal_switch"
+                style="@style/ATC3.Halo.Switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/atc3_exact_basal_title" />
+        </LinearLayout>
+
+        <!-- The link held between exchanges, Atc3BooleanKey.HoldLink. A plain switch, not a settings draft field. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_hold_link"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_hold_link_title" />
+
+                <TextView style="@style/ATC3.Halo.Caption.Faint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_hold_link_caption" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/atc3_hold_link_switch"
+                style="@style/ATC3.Halo.Switch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/atc3_hold_link_title" />
+        </LinearLayout>
+
         <!-- Driver trace, Atc3BooleanKey.Trace. A plain switch, not a settings draft field. -->
         <LinearLayout
             android:id="@+id/atc3_row_trace"
@@ -584,6 +628,26 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:contentDescription="@string/atc3_halo_trace_label" />
+        </LinearLayout>
+
+        <!-- The day so far by both accounts: the AAPS journal and the pump's own count. Information only. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_day_account"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_day_account_label" />
+
+                <TextView
+                    android:id="@+id/atc3_day_account_value"
+                    style="@style/ATC3.Halo.Caption.Faint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    tools:text="AAPS 12.350 U · pump 12.375 U · difference +0.025 U" />
+            </LinearLayout>
         </LinearLayout>
 
     </LinearLayout>

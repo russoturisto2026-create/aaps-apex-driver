@@ -42,21 +42,6 @@ class Atc3BolusSpacing {
     companion object {
 
         /**
-         * How long to wait for the phone's second of the minute to be inside the delivery
-         * window, [Atc3Const.BOLUS_WINDOW_FROM_MS] to [Atc3Const.BOLUS_WINDOW_TO_MS]; zero when
-         * it is there already. Never more than a minute.
-         */
-        fun windowWaitMs(nowMs: Long): Long {
-            val inMinute = Math.floorMod(nowMs, 60_000L)
-            return when {
-                inMinute < Atc3Const.BOLUS_WINDOW_FROM_MS -> Atc3Const.BOLUS_WINDOW_FROM_MS - inMinute
-                inMinute > Atc3Const.BOLUS_WINDOW_TO_MS   -> 60_000L - inMinute + Atc3Const.BOLUS_WINDOW_FROM_MS
-                else                                       -> 0L
-            }
-        }
-
-
-        /**
          * The wait itself, given when the previous bolus started and what time it is now.
          *
          * Never negative and never longer than [Atc3Const.BOLUS_SPACING_MS]. The ceiling is not

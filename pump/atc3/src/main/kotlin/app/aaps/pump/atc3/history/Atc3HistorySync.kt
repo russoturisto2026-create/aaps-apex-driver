@@ -25,6 +25,7 @@ import app.aaps.pump.atc3.comm.Atc3StatusV1
 import app.aaps.pump.atc3.comm.Atc3DailyStats
 import app.aaps.pump.atc3.comm.Atc3TbrRecord
 import app.aaps.pump.atc3.comm.Atc3TbrStatus
+import app.aaps.pump.atc3.keys.Atc3BooleanKey
 import app.aaps.pump.atc3.keys.Atc3LongNonKey
 import app.aaps.pump.atc3.keys.Atc3StringNonKey
 import app.aaps.pump.atc3.trace.Atc3Trace
@@ -63,8 +64,12 @@ class Atc3HistorySync @Inject constructor(
     private var loadedFor: String? = null
     private var ledger: Atc3HistoryLedger = Atc3HistoryLedger()
 
-    /** A bolus whose delivered amount the driver learned: when, and how much. */
-    private data class LearnedBolus(val learnedAtMs: Long, val units: Double)
+    /**
+     * A bolus whose delivered amount the driver learned: when, how much, and when it began to be
+     * delivered -- for the pump's records, the start of the minute the record stands in, which is
+     * no later than the bolus itself.
+     */
+    private data class LearnedBolus(val learnedAtMs: Long, val units: Double, val startMs: Long)
 
     /**
      * The boluses the driver has learned the delivered amount of, in memory only.
@@ -75,10 +80,29 @@ class Atc3HistorySync @Inject constructor(
      * boluses the pump's count already holds -- a bolus of ours moved onto the pump's minute
      * fell out of every window on 2026-09-28. The moment the driver learned the amount can:
      * a completion frame and a record both exist only after the delivery, so the count holds
-     * the bolus by then, and each bolus is learned exactly once. Nothing here outlives a
-     * restart, and neither does the anchor it is counted from.
+     * the bolus by then, and each bolus is learned exactly once. Kept on disk with the anchor it is
+     * counted from, so that a restart loses neither, see [Atc3StringNonKey.CheckLearned].
      */
     private val learned = mutableListOf<LearnedBolus>()
+    private var learnedLoaded = false
+
+    /** Read [learned] back from disk, once, the first time it is wanted. */
+    private fun loadLearned() {
+        if (learnedLoaded) return
+        learnedLoaded = true
+        val stored: String? = preferences.get(Atc3StringNonKey.CheckLearned)
+        stored.orEmpty().split('|').filter { it.isNotBlank() }.forEach { line ->
+            val p = line.split(';')
+            val at = p.getOrNull(0)?.toLongOrNull()
+            val units = p.getOrNull(1)?.toDoubleOrNull()
+            val start = p.getOrNull(2)?.toLongOrNull()
+            if (at != null && units != null && start != null) learned += LearnedBolus(at, units, start)
+        }
+    }
+
+    private fun storeLearned() {
+        preferences.put(Atc3StringNonKey.CheckLearned, learned.joinToString("|") { "${it.learnedAtMs};${it.units};${it.startMs}" })
+    }
 
     /**
      * Phone clock at the last successful reconciliation, zero until one has happened.
@@ -116,6 +140,9 @@ class Atc3HistorySync @Inject constructor(
                 lastReconciledAtMs = 0L
                 lastStatusAtMs = 0L
                 learned.clear()
+                storeLearned()
+                // Nor the half hour being counted: its count is the other pump's.
+                preferences.put(Atc3StringNonKey.BasalPeriod, "")
                 aapsLogger.debug(LTag.PUMP, "ATC3: the pump changed, nothing known of it is carried over")
             }
             ledger = Atc3HistoryLedger.decode(preferences.get(Atc3StringNonKey.HistoryLedger), serial) { line ->
@@ -382,7 +409,7 @@ class Atc3HistorySync @Inject constructor(
                 )
             )
         )
-        learn(deliveredUnits)
+        learn(deliveredUnits, pending.startedAtMs)
         atc3Pump.lastBolusTime = pending.startedAtMs
         atc3Pump.lastBolusAmount = deliveredUnits
         aapsLogger.debug(LTag.PUMP, "ATC3: the pump completed our bolus at $deliveredUnits U, id $pumpId")
@@ -392,22 +419,239 @@ class Atc3HistorySync @Inject constructor(
 
     /** Note a bolus whose delivered amount is known from now on. Zero is nothing to note. */
     @Synchronized
-    private fun learn(units: Double) {
+    private fun learn(units: Double, startMs: Long) {
         if (units == 0.0) return
-        learned += LearnedBolus(dateUtil.now(), units)
+        loadLearned()
+        learned += LearnedBolus(dateUtil.now(), units, startMs)
+        storeLearned()
     }
+
+    /**
+     * True when a bolus learned after [sinceMs] began to be delivered no later than [anchorReadMs].
+     *
+     * Then part of it may already be in the count the anchor was read at, while the check counts all
+     * of it after the anchor -- the anchor is no good. It happens when the anchor is read while a
+     * bolus runs: AAPS restarting in the middle of one, a read between its start and its record.
+     */
+    @Synchronized
+    fun bolusStraddles(sinceMs: Long, anchorReadMs: Long): Boolean {
+        loadLearned()
+        return learned.any { it.learnedAtMs > sinceMs && it.startMs <= anchorReadMs }
+    }
+
+    /** Where a record's bolus began at the latest: the start of the minute it stands in. */
+    private fun minuteStartOf(timestamp: Long): Long = timestamp - Math.floorMod(timestamp, 60_000L)
 
     /**
      * The boluses learned after [sinceMs], summed, which is what the delivery check counts as the
      * boluses since its anchor. See [learned].
      */
     @Synchronized
-    fun bolusesLearnedAfter(sinceMs: Long): Double = learned.filter { it.learnedAtMs > sinceMs }.sumOf { it.units }
+    fun bolusesLearnedAfter(sinceMs: Long): Double {
+        loadLearned()
+        return learned.filter { it.learnedAtMs > sinceMs }.sumOf { it.units }
+    }
 
-    /** The check anchored at [uptoMs]: what was learned by then is counted and can go. */
+    /**
+     * The check anchored at [uptoMs]: what was learned by then is counted and can go -- once it is
+     * older than any half hour still to be closed by the pump's count, which counts its boluses
+     * from a mark of its own, see [Atc3BasalPeriod].
+     */
     @Synchronized
     fun forgetBolusesLearnedUpTo(uptoMs: Long) {
-        learned.removeAll { it.learnedAtMs <= uptoMs }
+        loadLearned()
+        val keepFrom = dateUtil.now() - LEARNED_KEPT_MS
+        learned.removeAll { it.learnedAtMs <= uptoMs && it.learnedAtMs < keepFrom }
+        storeLearned()
+    }
+
+    /** True while a bolus of ours still waits for the pump's record of it. */
+    @Synchronized
+    fun hasPendingBolus(): Boolean = ledger().pending.isNotEmpty()
+
+    /**
+     * What the boluses of ours still without a record were asked for, summed: as much of the pump's
+     * count as they can account for while they run, before any of it is learned.
+     */
+    @Synchronized
+    fun pendingBolusUnits(): Double = ledger().pending.sumOf { it.requestedUnits }
+
+    /**
+     * Boluses of ours answered to AAPS as delivered whole though the pump could not be asked: the
+     * link went while they ran. In memory only: it decides who is told when the record says less,
+     * and after a restart the row is corrected all the same.
+     */
+    private val answeredWhole = HashSet<Long>()
+
+    /** The bolus under [temporaryId] was answered as delivered whole, on the pump's word still to come. */
+    @Synchronized
+    fun answeredWhole(temporaryId: Long) {
+        if (temporaryId != 0L) answeredWhole.add(temporaryId)
+    }
+
+    /**
+     * Where the half hour under way began, in the exact basal mode; zero when the mode is off.
+     *
+     * Everything before it is closed: the basal there is one row per period at what the pump's count
+     * gave it, and no row of a command, a record or a stop may be written or moved in there again.
+     */
+    private fun closedBefore(): Long {
+        if (!preferences.get(Atc3BooleanKey.ExactBasal)) return 0L
+        val stored: String? = preferences.get(Atc3StringNonKey.BasalPeriod)
+        return Atc3BasalPeriod.State.decode(stored.orEmpty()).start?.readMs ?: 0L
+    }
+
+    /** A temporary basal row of AAPS, as far as closing a half hour cares. */
+    data class JournalRow(
+        val pumpId: Long?,
+        val timestamp: Long,
+        val durationMs: Long,
+        val rate: Double,
+        val isAbsolute: Boolean,
+        /** True for a stop of the pump. */
+        val stop: Boolean
+    )
+
+    /**
+     * Write the basal of a passed period as the pump's count gives it: one row at `units / length`
+     * over `[startMs, endMs)`, in place of the rows of the commands. See [Atc3BasalPeriod].
+     *
+     * The temporary basal still running goes on from [endMs] under its own id -- the part of it
+     * before is in the period's row -- so that the loop finds its last command where it left it.
+     * One begun before the period, the mode having been switched on while it ran, keeps its row for
+     * the time before the period and goes on from [endMs] as a row of its own.
+     * Every other row begun in the period is taken out of AAPS -- one that runs past its end begins
+     * there instead -- and one begun before the period is cut where it begins.
+     *
+     * @param rows the rows AAPS holds anywhere in the period, read before anything is written
+     * @param pumpTbrDurationMs the length the pump says its running temporary basal was started
+     *   for, or null when none runs
+     * @param write how many times this period was written before; a period closed again takes a
+     *   row of its own and the one before is taken out
+     * @return false when the period cannot be closed at this read: the next read asks again
+     */
+    suspend fun writeBasalFact(
+        startMs: Long,
+        endMs: Long,
+        units: Double,
+        rows: List<JournalRow>,
+        pumpTbrDurationMs: Long?,
+        write: Int = 0
+    ): Boolean {
+        if (endMs <= startMs) return false
+        if (!ensureRegistered()) return false
+        val active = ledger().activeTbr
+        var goesOn: ActiveTbr? = null
+        if (active != null && active.startedAtMs < endMs) {
+            // Our own row not yet known under the pump's start is still being identified by the
+            // ticks, by where it begins. It is left alone until it is.
+            if (active.ours && !active.suspension && active.pumpStartUtcSeconds == null) {
+                trace.event(Atc3TraceCat.HIST, "fact", "ok" to false, "why" to "open_row_unidentified")
+                return false
+            }
+            val rowEnd = when {
+                active.suspension                                         -> endMs + active.ownDurationMs
+                active.pumpStartMs != null && pumpTbrDurationMs != null -> active.pumpStartMs + pumpTbrDurationMs
+                else                                                      -> active.startedAtMs + active.ownDurationMs
+            }
+            if (rowEnd - endMs < MIN_SHAPED_SPAN_MS) {
+                // Its time is over; the tick closes it, and the period after that.
+                trace.event(Atc3TraceCat.HIST, "fact", "ok" to false, "why" to "open_row_over")
+                return false
+            }
+            goesOn = active.copy(
+                pumpId = if (active.startedAtMs < startMs) Atc3PumpId.tbrStartAfter(endMs, active.pumpId) else active.pumpId,
+                startedAtMs = endMs,
+                ownDurationMs = if (active.suspension) active.ownDurationMs else rowEnd - endMs
+            )
+        }
+
+        val factId = Atc3PumpId.of(startMs, Atc3PumpId.KIND_BASAL_FACT, write)
+        var removed = 0
+        var cut = 0
+        var moved = 0
+        // The period's own row from the time before, when it is being closed again.
+        if (write > 0) {
+            val before = Atc3PumpId.of(startMs, Atc3PumpId.KIND_BASAL_FACT, write - 1)
+            if (before != factId && pumpSync.invalidateTemporaryBasalWithPumpId(before, PumpType.ATC3, serial)) removed++
+        }
+        for (row in rows) {
+            val id = row.pumpId ?: continue
+            if (id == factId || id == active?.pumpId) continue
+            if (row.timestamp >= endMs) continue
+            if (row.timestamp >= startMs) {
+                // One closed after the read the period ends at -- by a command of this very tick --
+                // keeps the part past that read.
+                val beyond = row.timestamp + row.durationMs - endMs
+                if (beyond >= MIN_SHAPED_SPAN_MS) {
+                    pumpSync.syncTemporaryBasalWithPumpId(
+                        timestamp = endMs, rate = row.rate, duration = beyond, isAbsolute = row.isAbsolute,
+                        type = null, pumpId = id, pumpType = PumpType.ATC3, pumpSerial = serial
+                    )
+                    store(ledger().withOurTbrRow(id, endMs))
+                    moved++
+                } else if (pumpSync.invalidateTemporaryBasalWithPumpId(id, PumpType.ATC3, serial)) removed++
+            } else if (row.timestamp + row.durationMs > startMs) {
+                // Type left as it is: null changes nothing of an existing row.
+                pumpSync.syncTemporaryBasalWithPumpId(
+                    timestamp = row.timestamp, rate = row.rate, duration = startMs - row.timestamp, isAbsolute = row.isAbsolute,
+                    type = null, pumpId = id, pumpType = PumpType.ATC3, pumpSerial = serial
+                )
+                cut++
+            }
+        }
+        if (goesOn != null && active != null && goesOn.pumpId == active.pumpId) {
+            pumpSync.syncTemporaryBasalWithPumpId(
+                timestamp = goesOn.startedAtMs, rate = goesOn.rate, duration = goesOn.ownDurationMs, isAbsolute = true,
+                type = null, pumpId = goesOn.pumpId, pumpType = PumpType.ATC3, pumpSerial = serial
+            )
+            store(ledger().withActiveTbr(goesOn).withOurTbrRow(goesOn.pumpId, goesOn.startedAtMs))
+        } else if (goesOn != null && active != null) {
+            // Begun before the period: its row is cut where the period begins, so the time before
+            // stays what it was, and it goes on past the period as a row of its own -- still the
+            // temporary basal the pump started, which the note says.
+            pumpSync.syncTemporaryBasalWithPumpId(
+                timestamp = active.startedAtMs, rate = active.rate, duration = startMs - active.startedAtMs, isAbsolute = true,
+                type = null, pumpId = active.pumpId, pumpType = PumpType.ATC3, pumpSerial = serial
+            )
+            cut++
+            pumpSync.syncTemporaryBasalWithPumpId(
+                timestamp = goesOn.startedAtMs, rate = goesOn.rate, duration = goesOn.ownDurationMs, isAbsolute = true,
+                type = if (active.suspension) PumpSync.TemporaryBasalType.PUMP_SUSPEND else PumpSync.TemporaryBasalType.NORMAL,
+                pumpId = goesOn.pumpId, pumpType = PumpType.ATC3, pumpSerial = serial
+            )
+            var updated = ledger().withActiveTbr(goesOn).withOurTbrEnd(active.pumpId, startMs)
+            active.pumpStartUtcSeconds?.let { own ->
+                val keepFromUtcSeconds = Atc3StatusV1.wallClockUtcSeconds(dateUtil.now() - Atc3Const.RECONCILE_MAX_AGE_MS)
+                val startedForMinutes = ((pumpTbrDurationMs ?: active.ownDurationMs) / 60_000L).toInt()
+                updated = updated.withOurTbr(
+                    own, goesOn.rate, startedForMinutes, keepFromUtcSeconds,
+                    goesOn.pumpId, pumpStart = true, rowMs = goesOn.startedAtMs, asOrdered = active.ours
+                )
+            }
+            store(updated)
+        }
+        val rate = units / ((endMs - startMs) / 3_600_000.0)
+        // A period the pump stood stopped through and through stays a stop in AAPS's list.
+        val inPeriod = rows.filter { it.timestamp < endMs && it.timestamp + it.durationMs > startMs }
+        val type = if (units <= 0.0 && inPeriod.isNotEmpty() && inPeriod.all { it.stop }) PumpSync.TemporaryBasalType.PUMP_SUSPEND
+        else PumpSync.TemporaryBasalType.NORMAL
+        val written = pumpSync.syncTemporaryBasalWithPumpId(
+            timestamp = startMs, rate = rate, duration = endMs - startMs, isAbsolute = true,
+            type = type, pumpId = factId, pumpType = PumpType.ATC3, pumpSerial = serial
+        )
+        aapsLogger.debug(
+            LTag.PUMP,
+            "ATC3: basal from $startMs to $endMs by the pump's count, $units U at $rate U/h, id $factId; " +
+                "$removed row(s) taken out, $cut cut, $moved moved to its end, " + (goesOn?.let { "id ${it.pumpId} goes on from $endMs" } ?: "none running")
+        )
+        trace.event(
+            Atc3TraceCat.HIST, "fact",
+            "ok" to true, "from" to startMs, "to" to endMs, "s" to (endMs - startMs) / 1000,
+            "units" to units, "rate" to rate, "id" to factId, "new" to written,
+            "removed" to removed, "cut" to cut, "moved" to moved, "goes_on" to (goesOn?.pumpId ?: 0L)
+        )
+        return true
     }
 
     /**
@@ -451,10 +695,6 @@ class Atc3HistorySync @Inject constructor(
     @Synchronized
     fun stateAgeMs(now: Long): Long =
         if (lastStatusAtMs == 0L) Long.MAX_VALUE else now - lastStatusAtMs
-
-    /** True when the state is fresh enough to act on without reading it again. */
-    @Synchronized
-    fun statusFresh(now: Long): Boolean = stateAgeMs(now) < Atc3Const.STATUS_FRESH_MS
 
     /** Bring AAPS in line with the bolus records the pump returned. */
     suspend fun reconcileBoluses(records: List<Atc3BolusRecord>, recordCount: Int): ReconcileResult {
@@ -510,7 +750,22 @@ class Atc3HistorySync @Inject constructor(
                         }
                     }
                     announceExtended(action.carriesExtendedPart, action.units, action.pumpId)
-                    learn(action.units)
+                    learn(action.units, action.pending.startedAtMs)
+                    // Answered as delivered whole when the link went, and the pump's record now
+                    // says less: this is the moment the shortfall is known, so this is when it is said.
+                    val wasAnsweredWhole = synchronized(this) { answeredWhole.remove(action.pending.temporaryId) }
+                    if (wasAnsweredWhole && action.pending.requestedUnits - action.units >= Atc3Const.DOSE_SCALE - 1e-9) {
+                        aapsLogger.error(
+                            LTag.PUMP,
+                            "ATC3: the pump recorded ${action.units} U of the ${action.pending.requestedUnits} U asked for, " +
+                                "of a bolus answered as delivered while the link was down"
+                        )
+                        uiInteraction.addNotification(
+                            Notification.PUMP_ERROR,
+                            rh.gs(R.string.atc3_bolus_short, action.units, action.pending.requestedUnits),
+                            Notification.URGENT
+                        )
+                    }
                     confirmed = action.units
                     newest = keepNewer(newest, action.timestamp to action.units)
                 }
@@ -530,7 +785,7 @@ class Atc3HistorySync @Inject constructor(
                         )
                     }
                     announceExtended(action.carriesExtendedPart, action.units, action.pumpId)
-                    learn(action.units)
+                    learn(action.units, minuteStartOf(action.timestamp))
                     newest = keepNewer(newest, action.timestamp to action.units)
                     if (newestImported == null || action.timestamp > newestImported) {
                         newestImported = action.timestamp
@@ -549,7 +804,7 @@ class Atc3HistorySync @Inject constructor(
                     // get: it updates the row that is already there rather than creating one.
                     syncPumpBolus(action.timestamp, action.units, action.pumpId, type = null)
                     // The row moved is nothing to the check; the amount changed is.
-                    learn(action.units - (settledBefore[action.pumpId] ?: 0.0))
+                    learn(action.units - (settledBefore[action.pumpId] ?: 0.0), minuteStartOf(action.timestamp))
                 }
 
                 is Atc3BolusAction.CountAttempt   -> {
@@ -680,10 +935,6 @@ class Atc3HistorySync @Inject constructor(
     /** True when [records] hold what can be the record of our bolus started at [startedAtMs]. */
     fun holdsRecordOf(records: List<Atc3BolusRecord>, startedAtMs: Long, requestedUnits: Double): Boolean =
         Atc3BolusReconciler.holdsRecordOf(records, Atc3StatusV1.wallClockUtcSeconds(startedAtMs), requestedUnits)
-
-    /** True when AAPS is holding a temporary basal record open. */
-    @Synchronized
-    fun hasOpenTbr(): Boolean = ledger().activeTbr != null
 
     /** The temporary basal the ledger believes is running, or null. */
     @Synchronized
@@ -978,13 +1229,16 @@ class Atc3HistorySync @Inject constructor(
      * stop. The record is the newest of that temporary basal, by the pump's own start when the row
      * carries it; with the pump's start also known to the second, a rate and a length are enough.
      *
-     * The row keeps its time and the rate it was set at: what the record delivered beyond or short
-     * of rate times time is the pump's portions, and the count puts that into the basal by time,
-     * [Atc3BasalCorrection], never by an invented rate. The record is remembered against the row,
-     * so that the book does not take it for a stranger's.
+     * The row keeps the rate it was set at; where the records say it delivered less than that rate
+     * over its time, its start moves later until they agree, as the book does, [Atc3TbrBook]. A read
+     * that fails costs nothing: the row closes where it would have, and the book shapes it on the
+     * next comparison that reads the journal.
      */
     private suspend fun shapedClose(row: ActiveTbr, proposedEndMs: Long, journal: (() -> List<Atc3TbrRecord>?)?): Long {
         if (journal == null || row.ours || row.suspension || row.rate < Atc3Const.DOSE_SCALE / 2) return proposedEndMs
+        // In the exact basal mode the insulin of a row is the pump's count over its half hour, not
+        // the record's over the row: nothing is moved to fit a record.
+        if (closedBefore() > 0L) return proposedEndMs
         val records = journal() ?: return proposedEndMs
         // The records are those of this temporary basal's minute: the pump's start is the minute's
         // identity, and a row without it is not closed from the journal here -- the tick learns
@@ -1008,14 +1262,28 @@ class Atc3HistorySync @Inject constructor(
             trace.event(Atc3TraceCat.TBR, "close", "id" to row.pumpId, "record" to false)
             return proposedEndMs
         }
+        // The row keeps the rate it was set at. Its start is the pump's stamp of the minute, up to
+        // a minute early; where the record says less was delivered than that rate over that time,
+        // the start moves later until rate times time is what the pump delivered.
+        val ran = (delivered / row.rate * 3_600_000.0).toLong()
+        val start = if (ran < span) (proposedEndMs - maxOf(ran, MIN_SHAPED_SPAN_MS)).coerceAtMost(row.startedAtMs + Atc3TbrBook.MAX_START_SHIFT_MS)
+        else row.startedAtMs
         trace.event(
             Atc3TraceCat.TBR, "close",
             "id" to row.pumpId, "record" to true, "units" to delivered, "records" to minuteRecords.size,
-            "s" to span / 1000, "rate" to row.rate, "raw" to raw
+            "s" to span / 1000, "rate" to row.rate, "raw" to raw, "from" to row.startedAtMs, "to" to start
         )
-        // Remembered whether or not the rate moved: the row is the record's, and the mirror need
+        if (start != row.startedAtMs) {
+            aapsLogger.debug(
+                LTag.PUMP,
+                "ATC3: temporary basal id ${row.pumpId} delivered $delivered U at ${row.rate} U/h, " +
+                    "its start moved from ${row.startedAtMs} to $start"
+            )
+            syncTbr(start, row.rate, proposedEndMs - start, PumpSync.TemporaryBasalType.NORMAL, row.pumpId, update = true)
+        }
+        // Remembered whether or not the start moved: the row is the record's, and the mirror need
         // not write it again -- nor cut it down when only a later part of it is left to read.
-        store(ledger().withOurTbrShaped(row.pumpId, delivered, proposedEndMs))
+        store(ledger().withOurTbrShaped(row.pumpId, delivered, proposedEndMs, rowMs = start))
         return proposedEndMs
     }
 
@@ -1037,6 +1305,9 @@ class Atc3HistorySync @Inject constructor(
      */
     private suspend fun endByRecord(row: ActiveTbr, stampMs: Long, phoneNow: Long, journal: (() -> List<Atc3TbrRecord>?)?): Long {
         if (journal == null || !row.ours || row.suspension || row.rate < Atc3Const.DOSE_SCALE / 2) return stampMs
+        // The row may begin at a watershed, later than the temporary basal did, and what its record
+        // delivered is then no measure of where it ended.
+        if (closedBefore() > 0L) return stampMs
         val own = row.pumpStartUtcSeconds ?: return stampMs
         val records = journal() ?: return stampMs
         val minuteRecords = records.filter { it.startUtcSeconds == own }.sortedByDescending { it.index }
@@ -1065,43 +1336,6 @@ class Atc3HistorySync @Inject constructor(
         }
         if (noted.any { it.pumpId == closing.pumpId }) return noted
         return noted + Atc3TbrBook.Row(closing.pumpId, startUtcSeconds, closing.startedAtMs, rawOf(closing.rate), closingEndMs, null, null)
-    }
-
-    /**
-     * Write the difference between the pump's count and the journal into the rows, as
-     * [Atc3BasalCorrection] planned it: a closed row shortened at its rate, or a correction row of
-     * its own. One log line per edit, so that every change to the basal record can be found.
-     */
-    suspend fun writeBasalCorrection(plan: Atc3BasalCorrection.Plan) {
-        for (edit in plan.edits) when (edit) {
-            is Atc3BasalCorrection.Edit.Shorten -> {
-                aapsLogger.debug(
-                    LTag.PUMP,
-                    "ATC3: basal correction ${"%+.3f".format(edit.units)} U, temporary basal id ${edit.pumpId} at ${edit.rateUnitsPerHour} U/h " +
-                        "cut from ${edit.oldEndMs} to ${edit.startMs + edit.durationMs}"
-                )
-                trace.event(
-                    Atc3TraceCat.TBR, "correct_cut",
-                    "id" to edit.pumpId, "rate" to edit.rateUnitsPerHour, "from" to edit.oldEndMs, "to" to edit.startMs + edit.durationMs, "units" to edit.units
-                )
-                syncTbr(edit.startMs, edit.rateUnitsPerHour, edit.durationMs, PumpSync.TemporaryBasalType.NORMAL, edit.pumpId, update = true)
-                store(ledger().withOurTbrEnd(edit.pumpId, edit.startMs + edit.durationMs, overwrite = true))
-            }
-
-            is Atc3BasalCorrection.Edit.Insert   -> {
-                val pumpId = Atc3PumpId.of(edit.startMs, Atc3PumpId.KIND_BASAL_CORRECTION)
-                aapsLogger.debug(
-                    LTag.PUMP,
-                    "ATC3: basal correction ${"%+.3f".format(edit.units)} U, a row of ${edit.rateUnitsPerHour} U/h from ${edit.startMs} " +
-                        "for ${edit.durationMs / 1000} s, id $pumpId"
-                )
-                trace.event(
-                    Atc3TraceCat.TBR, "correct_row",
-                    "id" to pumpId, "rate" to edit.rateUnitsPerHour, "at" to edit.startMs, "s" to edit.durationMs / 1000, "units" to edit.units
-                )
-                syncTbr(edit.startMs, edit.rateUnitsPerHour, edit.durationMs, PumpSync.TemporaryBasalType.NORMAL, pumpId)
-            }
-        }
     }
 
     /**
@@ -1179,6 +1413,7 @@ class Atc3HistorySync @Inject constructor(
         lastReconciledAtMs = 0L
         lastStatusAtMs = 0L
         loadedFor = newSerial
+        preferences.put(Atc3StringNonKey.BasalPeriod, "")
         store(Atc3HistoryLedger(serial = newSerial))
         aapsLogger.debug(LTag.PUMP, "ATC3: history ledger cleared for a new pump")
     }
@@ -1211,9 +1446,13 @@ class Atc3HistorySync @Inject constructor(
 
             is Atc3TbrAction.Stop   -> {
                 aapsLogger.debug(LTag.PUMP, "ATC3: temporary basal ended, id ${action.endPumpId}")
-                trace.event(Atc3TraceCat.TBR, "stop", "at" to action.timestamp, "id" to action.endPumpId)
+                // AAPS ends whatever row runs at the moment it is given. One inside a closed half
+                // hour would cut that period's row, so the end is kept past where the period closed.
+                val closedBefore = closedBefore()
+                val at = if (closedBefore > 0L) maxOf(action.timestamp, closedBefore + MIN_SHAPED_SPAN_MS) else action.timestamp
+                trace.event(Atc3TraceCat.TBR, "stop", "at" to at, "id" to action.endPumpId)
                 val closed = pumpSync.syncStopTemporaryBasalWithPumpId(
-                    timestamp = action.timestamp,
+                    timestamp = at,
                     endPumpId = action.endPumpId,
                     pumpType = PumpType.ATC3,
                     pumpSerial = serial
@@ -1276,13 +1515,23 @@ class Atc3HistorySync @Inject constructor(
             trace.event(Atc3TraceCat.TBR, "tbr_minute", "into" to carry.toPumpId, "units" to carry.units)
             store(ledger().withOurTbrCarried(carry.toPumpId, carry.units))
         }
-        // Every row AAPS holds stays at the rate it was set at, ours and a stranger's alike: its
-        // record only keeps the journal from taking it for a stranger's. What the record delivered
-        // beyond rate times time is the pump's portions, and the count writes that into the basal
-        // by time, see Atc3BasalCorrection.
-        for (shape in outcome.shapes) {
-            trace.event(Atc3TraceCat.TBR, "record", "id" to shape.pumpId, "s" to shape.durationMs / 1000, "units" to shape.units)
-            store(ledger().withOurTbrShaped(shape.pumpId, shape.units, shape.rowMs + shape.durationMs))
+        // A row AAPS asked for stays as it was ordered; its record only keeps the journal from
+        // taking it for a stranger's.
+        val asOrdered = current.ourTbrs.filter { it.asOrdered }.mapNotNullTo(HashSet()) { it.pumpId }
+        // Nor is any row moved to fit its record in the exact basal mode: its insulin is the pump's
+        // count over its half hour.
+        val shapes = if (closedBefore() > 0L) emptyList() else outcome.shapes.filterNot { it.pumpId in asOrdered }
+        for (shape in shapes) {
+            aapsLogger.debug(
+                LTag.PUMP,
+                "ATC3: temporary basal id ${shape.pumpId} from ${shape.rowMs} for ${shape.durationMs / 1000} s holds " +
+                    "${shape.units} U by the journal, ${shape.rateUnitsPerHour} U/h"
+            )
+            trace.event(Atc3TraceCat.TBR, "reshape", "id" to shape.pumpId, "rate" to shape.rateUnitsPerHour, "at" to shape.rowMs, "s" to shape.durationMs / 1000, "units" to shape.units)
+            // The rate is the one it was set at; the start moved to where that rate makes what the
+            // records say it delivered, see Atc3TbrBook.
+            syncTbr(shape.rowMs, shape.rateUnitsPerHour, shape.durationMs, PumpSync.TemporaryBasalType.NORMAL, shape.pumpId, update = true)
+            store(ledger().withOurTbrShaped(shape.pumpId, shape.units, shape.rowMs + shape.durationMs, rowMs = shape.rowMs))
         }
         for (import in outcome.imports) {
             aapsLogger.debug(
@@ -1304,11 +1553,11 @@ class Atc3HistorySync @Inject constructor(
             "minutes" to outcome.minutes,
             "with_rows" to outcome.minutesWithRows,
             "stale" to outcome.stale,
-            "shaped" to outcome.shapes.size,
+            "shaped" to shapes.size,
             "carried" to outcome.carries.size,
             "imported" to outcome.imports.size
         )
-        return outcome.imports.size
+        return shapes.size + outcome.imports.size + outcome.carries.size
     }
 
 
@@ -1330,6 +1579,9 @@ class Atc3HistorySync @Inject constructor(
         /** A row shorter than this keeps the rate it was set to rather than an average over nothing. */
         const val MIN_SHAPED_SPAN_MS = 1_000L
 
+        /** How long a learned bolus is kept: longer than any half hour may wait to be closed. */
+        const val LEARNED_KEPT_MS = 3 * 60 * 60_000L
+
         /** A rate in the pump's own raw steps, the way every amount here is compared. */
         fun rawOf(rate: Double): Int = Math.round(rate / Atc3Const.DOSE_SCALE).toInt()
     }
@@ -1343,6 +1595,17 @@ class Atc3HistorySync @Inject constructor(
         /** The record exists and is being changed: AAPS answers false for that, and it is no refusal. */
         update: Boolean = false
     ) {
+        // A closed half hour holds one row, the pump's count over it. A row that reaches back into
+        // it -- a stranger's temporary basal on the pump's stamp of its minute, a stop from the
+        // minute the pump keeps for it -- begins where the period closed, and one that lies wholly
+        // inside is in that count already.
+        val closedBefore = closedBefore()
+        if (closedBefore > 0L && timestamp < closedBefore) {
+            val left = durationMs - (closedBefore - timestamp)
+            trace.event(Atc3TraceCat.TBR, "kept_out", "at" to timestamp, "id" to pumpId, "left_s" to left / 1000)
+            if (left > 0L) syncTbr(closedBefore, rate, left, type, pumpId, update)
+            return
+        }
         // Not belt and braces: blast radius. `TB` requires a duration above zero and throws on
         // anything else, and this runs inside the command AAPS is executing, so an exception here
         // does not cost the one record -- it costs the whole tick, including the watermark that

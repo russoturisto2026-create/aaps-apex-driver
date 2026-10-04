@@ -29,15 +29,18 @@ class Atc3TbrBookTest {
         Atc3TbrBook.account(records, rows, bookStart, now, rows.mapTo(HashSet()) { it.pumpId })
 
     @Test
-    fun `a closed row takes the average rate its record makes of its time`() {
+    fun `a closed row keeps its rate and starts where that rate makes its record`() {
         val start = now - 30 * minute
         val outcome = account(
             listOf(record(start, 3.0, 0.2)),
             listOf(row(1L, start, 3.0, endMs = start + 280_000L))
         )
+        // 0.2 U at 3.0 U/h is 240 s: the row starts 40 s past the stamp, at its own rate.
         val shape = outcome.shapes.single()
         assertThat(shape.pumpId).isEqualTo(1L)
-        assertThat(shape.durationMs).isEqualTo(280_000L)
+        assertThat(shape.rateUnitsPerHour).isWithin(1e-9).of(3.0)
+        assertThat(shape.rowMs).isEqualTo(start + 40_000L)
+        assertThat(shape.durationMs).isEqualTo(240_000L)
         assertThat(shape.units()).isWithin(1e-9).of(0.2)
         assertThat(outcome.imports).isEmpty()
         assertThat(outcome.minutesWithRows).isEqualTo(1)
@@ -74,12 +77,13 @@ class Atc3TbrBookTest {
     }
 
     @Test
-    fun `a rate that delivered no pulse keeps its time at a rate of nothing`() {
+    fun `a rate that delivered no pulse keeps its rate and gives up no more than the stamp's minute`() {
         val start = now - 30 * minute
         val outcome = account(listOf(record(start, 0.1, 0.0)), listOf(row(1L, start, 0.1, endMs = start + 4 * minute)))
         val shape = outcome.shapes.single()
-        assertThat(shape.durationMs).isEqualTo(4 * minute)
-        assertThat(shape.rateUnitsPerHour).isWithin(1e-9).of(0.0)
+        assertThat(shape.rowMs).isEqualTo(start + minute)
+        assertThat(shape.durationMs).isEqualTo(3 * minute)
+        assertThat(shape.rateUnitsPerHour).isWithin(1e-9).of(0.1)
     }
 
     @Test
@@ -116,8 +120,14 @@ class Atc3TbrBookTest {
         )
         val byId = outcome.shapes.associateBy { it.pumpId }
         assertThat(byId.keys).containsExactly(1L, 2L)
-        assertThat(byId[1L]!!.units()).isWithin(1e-9).of(0.025)
-        assertThat(byId[2L]!!.units()).isWithin(1e-9).of(0.075)
+        // Each keeps its 3.0 U/h. The first delivered 0.025 U, 30 s of it, so it starts 10 s past the
+        // stamp; the continuation delivered 0.075 U, 90 s of it, but its start moves at most a minute.
+        assertThat(byId[1L]!!.units).isWithin(1e-9).of(0.025)
+        assertThat(byId[1L]!!.rateUnitsPerHour).isWithin(1e-9).of(3.0)
+        assertThat(byId[1L]!!.rowMs).isEqualTo(start + 10_000L)
+        assertThat(byId[2L]!!.units).isWithin(1e-9).of(0.075)
+        assertThat(byId[2L]!!.rateUnitsPerHour).isWithin(1e-9).of(3.0)
+        assertThat(byId[2L]!!.rowMs).isEqualTo(resumed + minute)
     }
 
     @Test
@@ -127,9 +137,13 @@ class Atc3TbrBookTest {
             listOf(record(start, 3.0, 0.025, index = 1), record(start, 3.0, 0.075, index = 0)),
             listOf(row(1L, start, 3.0, endMs = start + 20 * minute))
         )
+        // Their sum is 0.1 U, two minutes of 3.0 U/h over a row of twenty: the start moves the most it
+        // may, one minute, and the rest is the pump's portions, left as it is.
         val shape = outcome.shapes.single()
-        assertThat(shape.units()).isWithin(1e-9).of(0.1)
-        assertThat(shape.durationMs).isEqualTo(20 * minute)
+        assertThat(shape.units).isWithin(1e-9).of(0.1)
+        assertThat(shape.rateUnitsPerHour).isWithin(1e-9).of(3.0)
+        assertThat(shape.rowMs).isEqualTo(start + minute)
+        assertThat(shape.durationMs).isEqualTo(19 * minute)
     }
 
     @Test
@@ -141,10 +155,12 @@ class Atc3TbrBookTest {
             listOf(record(start, 3.0, 0.05, index = 1), record(start, 0.75, 0.05, index = 0)),
             listOf(row(1L, start, 3.0, endMs = start + 1L), row(2L, start, 0.75, endMs = start + 4 * minute))
         )
-        val shape = outcome.shapes.single()
-        assertThat(shape.pumpId).isEqualTo(2L)
-        assertThat(shape.units()).isWithin(1e-9).of(0.10)
-        assertThat(shape.durationMs).isEqualTo(4 * minute)
+        // Both records go to the row that has time. It delivered more than its 0.75 U/h over its
+        // four minutes, so it is left as it is: there is no stamp to move its start back to.
+        val records = listOf(record(start, 3.0, 0.05, index = 1), record(start, 0.75, 0.05, index = 0))
+        val rows = listOf(row(1L, start, 3.0, endMs = start + 1L), row(2L, start, 0.75, endMs = start + 4 * minute))
+        assertThat(Atc3TbrBook.giveOut(records.sortedByDescending { it.index }, rows)[2L]).isWithin(1e-9).of(0.10)
+        assertThat(outcome.shapes).isEmpty()
     }
 
     @Test

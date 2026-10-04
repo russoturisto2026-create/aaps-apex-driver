@@ -16,11 +16,15 @@ import kotlin.math.roundToInt
  * and cuts the others to nothing. So **the unit of account is the minute**: the insulin of a
  * minute's records has to land, once and in full, in the rows of that minute that have time.
  *
- * What a row of AAPS was given is worked out here and remembered against it, so that its record
- * is never taken for a stranger's; the row itself keeps the rate it was set at. What the records
- * delivered beyond rate times time is the pump's portions, and the pump's count writes that into
- * the basal by time, see [Atc3BasalCorrection]. A record nobody's row answers for is imported at the
- * rate it was set at, for the time that rate takes to deliver what the record says.
+ * A row keeps the rate it was set at, always: a row at an average rate is a rate nobody set, drawn
+ * on the graph and counted in the statistics as one. What moves is its start. A row begins at the
+ * pump's stamp of its minute, up to a minute before the temporary basal really began, so where the
+ * records say it delivered less than its rate over that time, the start is moved later until rate
+ * times time is what was delivered -- never earlier than the stamp, and no more than
+ * [MAX_START_SHIFT_MS] later: that is how far the stamp can be off. Beyond it the difference is the
+ * pump's portions, not the start, and moving the start further would hand the profile time the pump
+ * spent on the temporary basal with the profile stood still. Where the records say more, the row
+ * stays as it is.
  *
  * Nothing here writes anything and nothing here is remembered between reads: the rows are the
  * ledger's notes of what AAPS holds, the records are the pump's answer, and the outcome is what to
@@ -153,7 +157,14 @@ object Atc3TbrBook {
             if (row.rawRate == 0 && units <= 0.0) continue
             val span = (nextStartMs?.let { minOf(it, row.endMs) } ?: row.endMs) - row.rowMs
             if (span < MIN_SPAN_MS) continue
-            shapes.add(Shape(row.pumpId, row.rowMs, span, units / (span / HOUR_MS), units))
+            val rate = row.rawRate * Atc3Const.DOSE_SCALE
+            if (rate <= 0.0) continue
+            val end = row.rowMs + span
+            val ran = (units / rate * HOUR_MS).toLong()
+            if (ran >= span) continue
+            val start = (end - maxOf(ran, MIN_SPAN_MS)).coerceAtMost(row.rowMs + MAX_START_SHIFT_MS)
+            if (start <= row.rowMs) continue
+            shapes.add(Shape(row.pumpId, start, end - start, rate, units))
         }
     }
 
@@ -199,10 +210,10 @@ object Atc3TbrBook {
 
     /**
      * A row for a record nobody's row answers for: from the record's start, at the rate it was set
-     * at, for the time that rate takes to deliver what the record says -- no longer than the
-     * journal allows, to the next record's start, what it was started for, or now. A zero rate runs
-     * that whole time. A record set as a percentage has no rate of its own and takes the average
-     * of what it delivered over that time.
+     * at, for the time that rate takes to deliver what the record says -- no longer than the journal
+     * allows, to the next record's start, what it was started for, or now. A zero rate runs that
+     * whole time. Only a record set as a percentage, which has no rate of its own, takes the average
+     * of what it delivered.
      */
     private fun importOf(record: Atc3TbrRecord, nextStartMs: Long?, phoneNow: Long, taken: MutableSet<Long>): Import {
         val stated = record.durationMinutes * 60_000L
@@ -226,6 +237,9 @@ object Atc3TbrBook {
 
     /** A row shorter than this cannot hold insulin: its rate would be absurd. */
     const val MIN_SPAN_MS = 1_000L
+
+    /** How far a row's start may be moved past the pump's stamp: the stamp is the start of a minute. */
+    const val MAX_START_SHIFT_MS = 60_000L
 
     private const val HOUR_MS = 3_600_000.0
 }

@@ -118,9 +118,6 @@ class Atc3Trace @Inject constructor(
     /** A snapshot of the tally, safe to read while events are still being written. */
     fun tally(): Map<String, Int> = tally.toMap()
 
-    /** Forget what has been counted, which is what switching the trace on again means. */
-    fun resetTally() = tally.clear()
-
     fun now(): Long = System.currentTimeMillis()
 
     fun since(startMs: Long): Long = System.currentTimeMillis() - startMs

@@ -148,29 +148,23 @@ class Atc3StateCheckTest {
     }
 
     @Test
-    fun `what the journal owed is carried into the next anchor, not dropped`() {
+    fun `unexplained comparisons are counted in a row and an acceptance clears them`() {
         val check = anchored()
-        // 0.1 U the pump delivered ahead of the journal.
-        check.verdict(start + 6 * minute, 20.2, 0.1)
-        assertThat(check.lastDifference()).isWithin(1e-9).of(0.1)
-        // The pump's midnight, or a clock write: a new anchor, the same account.
-        check.forget()
-        assertThat(check.lastDifference()).isWithin(1e-9).of(0.1)
-        check.accept(start + 10 * minute, 0.05, carriedUnits = check.lastDifference()!!)
-        val verdict = check.compare(check.baseline()!!, start + 16 * minute, 0.15, 0.1, 0.05)
-        assertThat(verdict).isInstanceOf(Atc3StateCheck.Verdict.Differs::class.java)
-        assertThat((verdict as Atc3StateCheck.Verdict.Differs).units).isWithin(1e-9).of(0.1)
+        assertThat(check.unexplained()).isEqualTo(1)
+        assertThat(check.unexplained()).isEqualTo(2)
+        check.accept(start + 5 * minute, 20.1)
+        assertThat(check.unexplainedRuns()).isEqualTo(0)
     }
 
     @Test
-    fun `a difference that stayed and was looked into is counted afresh`() {
-        val check = anchored()
-        val wide = 0.125
-        check.compare(check.baseline()!!, start + 5 * minute, 20.18, 0.1, wide)
-        check.compare(check.baseline()!!, start + 10 * minute, 20.28, 0.2, wide)
-        assertThat(check.compare(check.baseline()!!, start + 15 * minute, 20.38, 0.3, wide)).isInstanceOf(Atc3StateCheck.Verdict.Differs::class.java)
-        check.lookedInto()
-        assertThat(check.compare(check.baseline()!!, start + 20 * minute, 20.48, 0.4, wide)).isEqualTo(Atc3StateCheck.Verdict.Matches)
+    fun `the anchor is stored and taken back after a restart`() {
+        val stored = anchored().apply { accept(start + 5 * minute, 20.1, learnedAfterMs = start + 6 * minute) }.encode()
+        val restarted = Atc3StateCheck()
+        assertThat(restarted.restore(stored)).isTrue()
+        assertThat(restarted.baseline()).isEqualTo(Atc3StateCheck.Baseline(start + 5 * minute, 20.1, start + 6 * minute))
+        // Nothing stored, nothing taken back; an anchor in memory is not overwritten.
+        assertThat(Atc3StateCheck().restore("")).isFalse()
+        assertThat(restarted.restore(anchored().encode())).isFalse()
     }
 
     // Delivery that has stopped without the pump saying so

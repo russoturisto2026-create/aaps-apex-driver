@@ -1002,12 +1002,14 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a bolus the pump has not recorded yet is judged on what it reported while running`() = runTest {
-        // The record is missing, so the progress frames are all there is. Stalling at nothing must
-        // not pass as done just because the pump has not written the record yet.
+    fun `a bolus the pump answered about and has not recorded is judged on what it reported while running`() = runTest {
+        // The pump was asked and holds no record, so the progress frames are all there is. Stalling
+        // at nothing must not pass as done just because the record is not there yet.
         whenever(atc3Manager.bolus(any(), any(), any()))
             .thenReturn(Atc3BolusOutcome.Delivered(0.0))
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(null)
+        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(emptyHistory)
+        whenever(atc3HistorySync.reconcileBoluses(any(), any()))
+            .thenReturn(Atc3HistorySync.ReconcileResult(confirmedUnits = null))
 
         val result = plugin.deliverTreatment(manualBolus(2.0, lastKnownBolusTime = 0L))
 
@@ -1028,11 +1030,12 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a bolus the pump could not be asked about is called unconfirmed, not short`() = runTest {
+    fun `a bolus the pump could not be asked about is answered as delivered, at what was asked for`() = runTest {
         // Null from the history read means every attempt failed, which is what happens when the
-        // link is what cut the bolus short -- and the pump goes on delivering a bolus it has
-        // accepted after the phone has gone. Nothing here measured a shortfall, so nothing may
-        // name one. Unsuccessful all the same: the loop must not take it as delivered.
+        // link is what cut the watching short -- and the pump goes on delivering a bolus it has
+        // accepted after the phone has gone: on the bench it delivered the whole of it every time.
+        // Answered as a failure, it showed the user an error for insulin that was going in. The
+        // row counts what was asked for, and the pump's record corrects it on the next connection.
         whenever(rh.gs(R.string.atc3_bolus_unconfirmed)).thenReturn("unconfirmed")
         whenever(atc3Manager.bolus(any(), any(), any()))
             .thenReturn(Atc3BolusOutcome.Delivered(0.4))
@@ -1040,8 +1043,22 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
         val result = plugin.deliverTreatment(manualBolus(1.0, lastKnownBolusTime = 0L))
 
-        assertThat(result.success).isFalse()
+        assertThat(result.success).isTrue()
+        assertThat(result.bolusDelivered).isEqualTo(1.0)
         assertThat(result.comment).isEqualTo("unconfirmed")
+        verify(atc3HistorySync).answeredWhole(any())
+    }
+
+    @Test
+    fun `a bolus the user stopped is not made whole by the link going after it`() = runTest {
+        whenever(atc3Manager.bolus(any(), any(), any()))
+            .thenReturn(Atc3BolusOutcome.Delivered(0.4, cancelled = true))
+        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(null)
+
+        val result = plugin.deliverTreatment(manualBolus(1.0, lastKnownBolusTime = 0L))
+
+        assertThat(result.bolusDelivered).isEqualTo(0.4)
+        verify(atc3HistorySync, never()).answeredWhole(any())
     }
 
     @Test
@@ -1098,35 +1115,6 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         order.verify(atc3HistorySync, times(1)).settleCompleted(eq(42L), eq(2.0))
         order.verify(atc3Manager, times(1)).readBolusHistoryUntil(any(), any())
         order.verify(atc3HistorySync, times(1)).reconcileBoluses(any(), any())
-    }
-
-    @Test
-    fun `a bolus asked for in the first seconds of a minute leaves at the tenth`() = runTest {
-        // The pump stamps the record with the minute the bolus started on its own clock; sent at
-        // second 2 on a clock a few seconds behind, it would land in the minute before for the
-        // pump. So it waits for second 10. The hold runs on real time here, as it does in the
-        // driver, so the clock is a real one moved to second 9 of a minute: one second of waiting.
-        val minute = Math.floorDiv(now, 60_000L) * 60_000L
-        val realStart = System.currentTimeMillis()
-        whenever(dateUtil.now()).thenAnswer { minute + 9_000L + (System.currentTimeMillis() - realStart) }
-        var sentAt = 0L
-        whenever(atc3Manager.bolus(any(), any(), any())).thenAnswer { invocation ->
-            sentAt = dateUtil.now()
-            @Suppress("UNCHECKED_CAST")
-            val onAccepted = invocation.arguments[1] as suspend (Long) -> Unit
-            runBlocking { onAccepted(sentAt) }
-            Atc3BolusOutcome.Delivered(1.0, completed = true, sawProgress = true, acceptedAtMs = sentAt)
-        }
-        whenever(atc3HistorySync.registerPending(any(), any(), any())).thenReturn(42L)
-        whenever(atc3HistorySync.settleCompleted(any(), any())).thenReturn(true)
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(emptyHistory)
-        whenever(atc3HistorySync.reconcileBoluses(any(), any())).thenReturn(Atc3HistorySync.ReconcileResult())
-
-        val result = plugin.deliverTreatment(manualBolus(1.0, lastKnownBolusTime = 0L))
-
-        assertThat(result.success).isTrue()
-        assertThat(Math.floorMod(sentAt, 60_000L)).isAtLeast(Atc3Const.BOLUS_WINDOW_FROM_MS)
-        assertThat(Math.floorMod(sentAt, 60_000L)).isAtMost(Atc3Const.BOLUS_WINDOW_TO_MS)
     }
 
     @Test

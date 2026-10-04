@@ -39,4 +39,13 @@ enum class Atc3BooleanKey(
      * a phone turns out to handle a long lived link badly.
      */
     HoldLink("atc3_hold_link", true),
+
+    /**
+     * Which basal AAPS keeps of a passed half hour: the commands as they were ordered, or what the
+     * pump's own count says went in, see [app.aaps.pump.atc3.history.Atc3BasalPeriod].
+     *
+     * Off by default: the rows of the commands stay as they are. On, every passed half hour is
+     * written as one row at the rate the pump's count gives it, in place of those rows.
+     */
+    ExactBasal("atc3_exact_basal", false),
 }

@@ -32,6 +32,15 @@ enum class DoseStepSize(private val entries: Array<DoseStepSizeEntry>) {
             DoseStepSizeEntry(10.0, Double.MAX_VALUE, 0.1)
         )
     ),
+    // ATC3: what the pump can deliver whole, for a bolus and a basal rate alike: 0.025 U below
+    // 1 U, 0.05 U from 1 U, 0.1 U from 2 U.
+    Atc3(
+        arrayOf(
+            DoseStepSizeEntry(0.0, 1.0, 0.025),
+            DoseStepSizeEntry(1.0, 2.0, 0.05),
+            DoseStepSizeEntry(2.0, Double.MAX_VALUE, 0.1)
+        )
+    ),
     YpsopumpBasal(
         arrayOf(
             DoseStepSizeEntry(0.0, 1.0, 0.01),

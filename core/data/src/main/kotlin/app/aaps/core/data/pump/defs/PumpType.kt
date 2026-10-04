@@ -487,7 +487,9 @@ enum class PumpType(
         manufacturer = ManufacturerType.Atc3,
         model = "ATC3",
         bolusSize = 0.025,
-        specialBolusSize = null,
+        // A bolus from 1 U goes in 0.05 U portions and from 2 U in 0.1 U ones: an amount off that
+        // step is delivered rounded by the pump itself (1.425 U went in as 1.45 U).
+        specialBolusSize = DoseStepSize.Atc3,
         // The pump does have an extended bolus, but the driver offers none: its history record
         // carries no duration, so one read back could not be reconstructed.
         extendedBolusSettings = null,
@@ -504,7 +506,8 @@ enum class PumpType(
         baseBasalMinValue = 0.025,
         baseBasalMaxValue = 25.0, // Outer bound, see tbrSettings above.
         baseBasalStep = 0.025,
-        baseBasalSpecialSteps = null,
+        // Basal and temporary basal rates are ordered on the same steps as a bolus.
+        baseBasalSpecialSteps = DoseStepSize.Atc3,
         pumpCapability = PumpCapability.Atc3Capabilities,
         // A 300 U cartridge; the pump reports a little over its nominal size when freshly filled.
         maxReservoirReading = 300,
