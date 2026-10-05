@@ -156,17 +156,6 @@ class Atc3StateCheckTest {
         assertThat(check.unexplainedRuns()).isEqualTo(0)
     }
 
-    @Test
-    fun `the anchor is stored and taken back after a restart`() {
-        val stored = anchored().apply { accept(start + 5 * minute, 20.1, learnedAfterMs = start + 6 * minute) }.encode()
-        val restarted = Atc3StateCheck()
-        assertThat(restarted.restore(stored)).isTrue()
-        assertThat(restarted.baseline()).isEqualTo(Atc3StateCheck.Baseline(start + 5 * minute, 20.1, start + 6 * minute))
-        // Nothing stored, nothing taken back; an anchor in memory is not overwritten.
-        assertThat(Atc3StateCheck().restore("")).isFalse()
-        assertThat(restarted.restore(anchored().encode())).isFalse()
-    }
-
     // Delivery that has stopped without the pump saying so
 
     @Test

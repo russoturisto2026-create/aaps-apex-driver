@@ -650,5 +650,25 @@
             </LinearLayout>
         </LinearLayout>
 
+        <!-- Which driver this is, see Atc3Const.DRIVER_VERSION. -->
+        <LinearLayout
+            android:id="@+id/atc3_row_driver_version"
+            style="@style/ATC3.Halo.SettingRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout style="@style/ATC3.Halo.SettingLabels">
+
+                <TextView style="@style/ATC3.Halo.Value" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/atc3_halo_driver_version_label" />
+
+                <TextView
+                    android:id="@+id/atc3_driver_version_value"
+                    style="@style/ATC3.Halo.Caption.Faint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    tools:text="2026.10.05.8" />
+            </LinearLayout>
+        </LinearLayout>
+
     </LinearLayout>
 </androidx.core.widget.NestedScrollView>

@@ -17,11 +17,17 @@
     <string name="atc3_alarm_stop_locked">The pump is delivering nothing under its alarm and is locked, so it cannot be stopped from here. Unlock the pump and stop it.</string>
     <string name="atc3_no_delivery">The pump reports that it is delivering, but the reservoir has not moved. Check the pump and the infusion set.</string>
     <string name="atc3_command_data_changed">The pump records changed what AAPS knew; the loop will decide again on the corrected data</string>
+    <string name="atc3_journal_shortfall">The pump delivered %1$.3f U less than the AAPS journal accounts for, and its journals do not explain it. Check that the pump is delivering.</string>
     <string name="atc3_journal_unexplained">The pump counted %1$.3f U more than the AAPS journal accounts for, and its journals do not explain it. Check the pump.</string>
     <string name="atc3_bolus_unconfirmed_dropped">The pump recorded a later bolus but never the bolus of %1$.2f U. It has been zeroed in AAPS. Check the pump to see whether the insulin was delivered.</string>
     <string name="atc3_no_delivery_loop_blocked">The pump is not delivering the insulin it reports. The loop is stopped until the pump has been checked.</string>
-    <string name="atc3_firmware_too_old">Pump firmware %1$s is older than %2$s and is not safe: it has no Bluetooth password, so anything within radio range can control the pump. AAPS will not use this pump. Contact the distributor and have the firmware updated.</string>
-    <string name="atc3_firmware_loop_blocked">Pump firmware is too old to be used safely</string>
+    <string name="atc3_link_silent">Apex: the pump has not answered for %1$d min. Check the pump and the phone\'s Bluetooth.</string>
+    <string name="atc3_link_stopped">Apex: the pump has not answered for %1$d min. AAPS has stopped: the loop does not run and no basal is counted until the pump answers.</string>
+    <string name="atc3_link_loop_blocked">The pump has not answered for over half an hour. The loop is stopped until it answers.</string>
+    <string name="atc3_link_wait">Apex: waiting for the pump to answer</string>
+    <string name="atc3_link_back_reset">Apex: the pump is back after %1$d min with its count of delivered insulin begun anew, so what it delivered over that time cannot be counted: recorded as no basal. Check the pump.</string>
+    <string name="atc3_link_back_midnight">Apex: the pump is back after %1$d min. What it delivered before midnight could not be read from it and is recorded as no basal. Check the pump.</string>
+    <string name="atc3_firmware_no_password">Pump firmware %1$s has no Bluetooth password: anything within radio range can control this pump. Have the firmware updated to %2$s or newer.</string>
     <string name="atc3_pump_locked">The pump is locked and refuses every command. It can only be unlocked on the pump itself.</string>
     <string name="atc3_bolus_failed">Bolus could not be delivered</string>
     <string name="atc3_bolus_cancelled">Bolus cancelled, no insulin was delivered</string>
@@ -38,6 +44,7 @@
     <string name="atc3_alarm_low_battery">low battery</string>
     <string name="atc3_alarm_bg_reminder">blood glucose reminder</string>
     <string name="atc3_alarm_button_error">button error</string>
+    <string name="atc3_alarm_motor_error">motor error</string>
     <string name="atc3_alarm_no_delivery">no delivery, which is the occlusion alarm</string>
     <string name="atc3_refill_note">Reservoir refilled, %1$.2f U used to fill the set</string>
     <string name="atc3_alarm_daily_limit">daily dose limit reached, the pump delivers nothing more today</string>
@@ -134,6 +141,8 @@
     <string name="atc3_hold_link_title">Keep the pump connection open</string>
     <string name="atc3_hold_link_summary">Stay connected between exchanges instead of reconnecting every few minutes. The pump sends a signal every three minutes, and the connection is dropped and rebuilt if that stops arriving. Turn this off only if the connection proves unreliable on this phone.</string>
     <string name="atc3_password_given_up">The pump refused the Bluetooth password ten times, so the driver has stopped trying. Read the current B/P from the pump status screen and enter it in the Apex settings.</string>
+    <string name="atc3_password_missing">No Bluetooth password is entered in AAPS, so the driver is not working with the pump. Read the current B/P from the pump status screen and enter it in the Apex settings; for a pump with its password switched off, enter 000000.</string>
+    <string name="atc3_password_loop_blocked">No Bluetooth password is entered in AAPS. The loop is stopped until one is.</string>
     <string name="atc3_password_rejected">The pump refused the Bluetooth password. Read the current B/P from the pump status screen and enter it again.</string>
     <string name="atc3_password_not_set">The pump has no Bluetooth password, so anything within radio range can control it. Set one from the Apex device screen and check the B/P line on the pump.</string>
     <string name="atc3_halo_link_unprotected">No Bluetooth password: anything within radio range can control this pump. Set one below.</string>
@@ -155,8 +164,10 @@
 
     <string name="atc3_halo_exact_basal_caption">Every passed half hour as one record at what the pump counted, in place of the commands</string>
     <string name="atc3_halo_hold_link_caption">Stay connected between exchanges instead of reconnecting each time</string>
+    <string name="atc3_halo_driver_version_label">Driver version</string>
     <string name="atc3_halo_day_account_label">Delivered today: AAPS and the pump</string>
     <string name="atc3_halo_day_account_value">AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
+    <string name="atc3_halo_day_account_value_since">since %4$s · AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
     <string name="atc3_halo_day_account_none">not compared yet</string>
     <string name="atc3_halo_trace_label">Driver trace</string>
     <string name="atc3_halo_trace_caption">Machine readable log for bench captures, off unless one is being taken</string>

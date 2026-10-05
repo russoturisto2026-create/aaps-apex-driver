@@ -25,6 +25,9 @@ object Atc3PumpId {
     /** The basal of a passed half hour by the pump's count, see [Atc3BasalPeriod]. */
     const val KIND_BASAL_FACT = 4L
 
+    /** The stop a pump is held in for want of an answer, see [Atc3LinkWatch]. */
+    const val KIND_LINK_STOP = 5L
+
     /** How far an id may be bumped away from a second another record already holds. */
     const val MAX_BUMP = 9
 

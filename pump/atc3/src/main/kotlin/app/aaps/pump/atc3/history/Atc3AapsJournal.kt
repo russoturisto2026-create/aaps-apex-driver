@@ -1,6 +1,5 @@
 package app.aaps.pump.atc3.history
 
-import app.aaps.core.data.model.BS
 import app.aaps.core.data.model.TB
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.profile.ProfileFunction
@@ -100,16 +99,20 @@ class Atc3AapsJournal @Inject constructor(
     }
 
     /**
-     * What the journal accounts for since the pump's midnight at [dayStartMs], for setting beside the
-     * pump's count of the day on the driver's screen. Here the boluses are taken by their rows: over
-     * a whole day the minute a row is stamped on does not matter, as it does between two reads.
+     * What the journal accounts for since [fromMs] -- the pump's midnight, or the beginning the
+     * day's account was last taken up at -- for setting beside the pump's count on the driver's
+     * screen. Here the boluses are taken by their rows: over hours the minute a row is stamped on
+     * does not matter, as it does between two reads.
      */
-    suspend fun insulinOfDay(dayStartMs: Long, toMs: Long): Atc3JournalArithmetic.Breakdown? {
+    suspend fun insulinOfDay(fromMs: Long, toMs: Long): Atc3JournalArithmetic.Breakdown? =
+        insulinBetween(fromMs, toMs, bolusesBetween(fromMs, toMs))
+
+    /** The boluses of this pump AAPS holds rows of in `[fromMs, toMs)`, summed. */
+    suspend fun bolusesBetween(fromMs: Long, toMs: Long): Double {
         val serial = atc3Pump.serialNumber
-        val boluses = persistenceLayer.getBolusesFromTimeToTime(dayStartMs, toMs, true)
-            .filter { it.isValid && it.ids.pumpSerial == serial && it.type != BS.Type.PRIMING }
+        return persistenceLayer.getBolusesFromTimeToTime(fromMs, toMs, true)
+            .filter { it.isValid && it.ids.pumpSerial == serial }
             .sumOf { it.amount }
-        return insulinBetween(dayStartMs, toMs, boluses)
     }
 
     /**

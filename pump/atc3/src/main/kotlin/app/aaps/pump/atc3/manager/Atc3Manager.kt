@@ -231,10 +231,49 @@ class Atc3Manager @Inject constructor(
         livenessWatch = null
     }
 
+    /** True once the user has been told that no password is entered, until one is. */
+    private var passwordMissingSaid = false
+
+    /**
+     * Whether a Bluetooth password is entered in AAPS at all. Without one the driver does not work
+     * with the pump and the loop does not run, see [refuseWithoutPassword].
+     */
+    val isPasswordEntered: Boolean
+        get() = (preferences.get(Atc3StringKey.Atc3BtPassword) as String?)?.let { Atc3BtPassword.isValid(it) } == true
+
+    private fun passwordEntered(): Boolean {
+        val entered = isPasswordEntered
+        if (entered) passwordMissingSaid = false
+        return entered
+    }
+
+    /**
+     * With no Bluetooth password entered in AAPS the driver does not work with the pump at all.
+     *
+     * Not even to find out whether the pump asks for one, because what the pump lets through says
+     * nothing: it accepts a link, not a client. On the bench, 2026-10-05, with the password taken
+     * out of AAPS, the pump refused the driver twice while the driver was alone on the link, and
+     * let it in the moment the vendor's application had opened the link under the right password.
+     * The driver then delivered the loop's boluses for half an hour with no password of its own,
+     * and told the user that the pump had none. A pump that really has none is entered as `000000`.
+     */
+    private fun refuseWithoutPassword() {
+        aapsLogger.error(LTag.PUMP, "ATC3: no Bluetooth password is entered in AAPS, not working with the pump")
+        if (passwordMissingSaid) return
+        passwordMissingSaid = true
+        trace.event(Atc3TraceCat.SESS, "no_password")
+        uiInteraction.addNotification(Notification.PUMP_ERROR, rh.gs(R.string.atc3_password_missing), Notification.URGENT)
+        rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
+    }
+
     fun connect(reason: String): Boolean {
         aapsLogger.debug(LTag.PUMP, "ATC3: connect, reason $reason")
         if (!isConfigured) {
             aapsLogger.error(LTag.PUMP, "ATC3: serial number is not configured, cannot connect")
+            return false
+        }
+        if (!passwordEntered()) {
+            refuseWithoutPassword()
             return false
         }
         // A refused attempt costs the pump nothing, so it is not a wakeup and is not counted as
@@ -1361,6 +1400,13 @@ class Atc3Manager @Inject constructor(
         exchangeLock.lock()
         val startedAt = trace.now()
         try {
+            // A link held from before the password was taken out of AAPS is no link to work on.
+            if (!passwordEntered()) {
+                refuseWithoutPassword()
+                atc3BLE.disconnect()
+                finished(what, false, "no_password", queuedAt, startedAt)
+                return false
+            }
             settleAfterConnecting()
             val latch = arm(match, burstOf)
             if (!sender()) {

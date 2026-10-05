@@ -46,6 +46,8 @@ class Atc3ManagerSettleTest : TestBaseWithProfile() {
         // No serial, so the request cannot even be built and the exchange fails at the send. The
         // settle gate runs before that, which is what makes this the cheap way to reach it.
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("")
+        // A password is entered: without one the driver asks the pump nothing, which is not what these are about.
+        whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         whenever(atc3BLE.write(any())).thenReturn(false)
         manager = Atc3Manager(
             aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3Pump(),

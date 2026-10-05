@@ -2,6 +2,7 @@ package app.aaps.pump.atc3.manager
 
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.pump.atc3.Atc3Const
+import app.aaps.pump.atc3.R
 import app.aaps.pump.atc3.Atc3Pump
 import app.aaps.pump.atc3.ble.Atc3BLE
 import app.aaps.pump.atc3.history.Atc3ClockWatch
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
@@ -38,6 +40,8 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
     @BeforeEach
     fun setup() {
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("12345678")
+        // A password is entered: without one the driver asks the pump nothing, which is not what these are about.
+        whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         whenever(preferences.get(Atc3StringKey.Atc3Address)).thenReturn("11:22:33:AA:BB:CC")
         whenever(preferences.get(Atc3BooleanKey.Trace)).thenReturn(false)
         // No change has been made, so there is no second candidate to fall back to.
@@ -89,6 +93,35 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
 
         assertThat(manager.connect("Connection needed")).isFalse()
         verify(atc3BLE, times(Atc3Const.AUTH_MAX_ATTEMPTS)).connect(any())
+    }
+
+    /**
+     * With no password entered the driver does not bring a link up at all: what the pump lets
+     * through says nothing, since it lets anybody onto a link another client has opened.
+     */
+    @Test
+    fun `with no password entered nothing is connected to, and the user is told once`() {
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(0L)
+        whenever(atc3BLE.connect(any())).thenReturn(true)
+        whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("")
+        whenever(rh.gs(R.string.atc3_password_missing)).thenReturn("no password entered")
+
+        assertThat(manager.connect("Connection needed")).isFalse()
+        assertThat(manager.connect("Connection needed")).isFalse()
+
+        verify(atc3BLE, never()).connect(any())
+        verify(uiInteraction, times(1)).addNotification(any(), eq("no password entered"), any())
+    }
+
+    /** A link held from before the password was taken out is dropped at the first request. */
+    @Test
+    fun `a link held when the password is taken out is dropped rather than used`() {
+        whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("")
+
+        assertThat(manager.readStatus()).isFalse()
+
+        verify(atc3BLE).disconnect()
+        verify(atc3BLE, never()).write(any())
     }
 
     /** Entering a different password is a different question, and it gets its own ten tries. */

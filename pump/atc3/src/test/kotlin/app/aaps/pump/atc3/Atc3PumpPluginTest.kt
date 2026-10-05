@@ -19,6 +19,12 @@ import app.aaps.pump.atc3.comm.Atc3LinkProtection
 import app.aaps.pump.atc3.comm.Atc3Settings
 import app.aaps.pump.atc3.history.Atc3AapsJournal
 import app.aaps.pump.atc3.history.Atc3HistorySync
+import app.aaps.pump.atc3.history.Atc3DayClock
+import app.aaps.pump.atc3.history.Atc3JournalArithmetic
+import app.aaps.pump.atc3.history.Atc3LinkWatch
+import app.aaps.pump.atc3.comm.Atc3StatusV1
+import app.aaps.pump.atc3.keys.Atc3StringKey
+import app.aaps.pump.atc3.keys.Atc3StringNonKey
 import app.aaps.core.interfaces.pump.PumpEnactResult
 import app.aaps.pump.atc3.manager.Atc3BolusOutcome
 import app.aaps.pump.atc3.manager.Atc3Manager
@@ -38,6 +44,7 @@ import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.inOrder
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -100,6 +107,8 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         whenever(rh.gs(anyInt(), anyOrNull())).thenReturn("mocked resource")
         whenever(rh.gs(anyInt(), anyOrNull(), anyOrNull())).thenReturn("mocked resource")
         whenever(atc3Manager.isConnected).thenReturn(true)
+        // A password is entered: without one the driver does nothing and the loop does not run.
+        whenever(atc3Manager.isPasswordEntered).thenReturn(true)
         // A protected link is the uninteresting case for everything else in here.
         whenever(atc3Manager.linkProtection).thenReturn(Atc3LinkProtection.PROTECTED)
         whenever(atc3Manager.readBolusHistory()).thenReturn(emptyHistory)
@@ -112,6 +121,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         // the uninteresting thing — the write went in — so each case can stub over it when the
         // answer is what it is about.
             whenever(atc3HistorySync.recordDailyTotals(any())).thenReturn(0)
+            whenever(atc3HistorySync.recordRefills(any())).thenReturn(0)
             whenever(atc3HistorySync.reconcileTbrHistory(any())).thenReturn(0)
             whenever(atc3HistorySync.recordDerivedStopInTbr(any(), any(), any())).thenReturn(false)
         }
@@ -588,24 +598,32 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a pump on firmware older than the minimum is refused, warned about and kept from the loop`() = runTest {
+    fun `a pump on firmware older than the password is run, under the warning a pump set to 000000 gets`() = runTest {
         atc3Pump.version = Atc3Version(firmware = listOf(1, 1, 0, 9), protocolMajor = 4, protocolMinor = 12, unknown = emptyList())
         whenever(atc3Manager.readStatus()).thenReturn(true)
+        // Such firmware works under 000000, which the pump accepts.
+        whenever(atc3Manager.linkProtection).thenReturn(Atc3LinkProtection.UNPROTECTED)
 
         plugin.getPumpStatus("test")
-        verify(atc3Manager, never()).readStatus()
-        verify(uiInteraction).addNotification(eq(Notification.PUMP_ERROR), any(), eq(Notification.URGENT))
 
-        val result = plugin.setTempBasalAbsolute(1.0, 30, validProfile, false, tbrTypeNormal)
-        assertThat(result.success).isFalse()
-        verify(atc3Manager, never()).setTempBasal(any(), any())
-
-        val loop = plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger))
-        assertThat(loop.value()).isFalse()
+        verify(atc3Manager, times(1)).readStatus()
+        verify(uiInteraction).addNotification(eq(Notification.WRONG_PUMP_PASSWORD), any(), eq(Notification.NORMAL))
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
     }
 
     @Test
-    fun `a pump on the minimum firmware is run`() = runTest {
+    fun `a pump with no authorisation service at all is run under the same warning`() = runTest {
+        whenever(atc3Manager.readStatus()).thenReturn(true)
+        whenever(atc3Manager.linkProtection).thenReturn(Atc3LinkProtection.UNSUPPORTED)
+
+        plugin.getPumpStatus("test")
+
+        verify(atc3Manager, times(1)).readStatus()
+        verify(uiInteraction).addNotification(eq(Notification.WRONG_PUMP_PASSWORD), any(), eq(Notification.NORMAL))
+    }
+
+    @Test
+    fun `a pump on firmware with a password is run without that warning`() = runTest {
         atc3Pump.version = Atc3Version(firmware = listOf(1, 1, 1, 0), protocolMajor = 4, protocolMinor = 12, unknown = emptyList())
         whenever(atc3Manager.readStatus()).thenReturn(true)
 
@@ -1316,5 +1334,170 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         assertThat(smbResult.success).isFalse()
         assertThat(manualResult.success).isFalse()
         verify(atc3Manager, never()).bolus(any(), any(), any())
+    }
+
+    // No Bluetooth password entered in AAPS
+
+    @Test
+    fun `with no password entered the loop does not run`() = runTest {
+        whenever(atc3Manager.isPasswordEntered).thenReturn(false)
+
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
+    }
+
+    // A refill is a beginning
+
+    @Test
+    fun `a reservoir that went up starts the comparison anew, by the pump's journals`() = runTest {
+        pumpAnswersWithCount(10.0)
+        runBlocking {
+            whenever(aapsJournal.insulinBetween(any(), any(), any())).thenReturn(Atc3JournalArithmetic.Breakdown(0.0, 0.0, 0.0))
+        }
+        atc3Pump.reservoirUnits = 27.55
+        // The first reads after a start have nothing to compare against and the clock to set, and
+        // read the journals; after them a read that agrees with the journal reads nothing.
+        plugin.getPumpStatus("test")
+        plugin.getPumpStatus("test")
+        clearInvocations(atc3Manager)
+        plugin.getPumpStatus("test")
+        verify(atc3Manager, never()).readBolusHistory()
+
+        atc3Pump.reservoirUnits = 304.775
+        plugin.getPumpStatus("test")
+
+        verify(atc3Manager, atLeastOnce()).readBolusHistory()
+    }
+
+    // A pump that has stopped answering
+
+    /** The pump's last answer before a silence, on the day of [now] whatever the zone the test runs in. */
+    private fun lastAnswer() = maxOf(now - 40 * 60_000L, Atc3DayClock.dayStartOf(now) + 1_000L)
+
+    /** A status read at [now] with the pump's count at [counter], and journals that answer. */
+    private fun pumpAnswersWithCount(counter: Double) {
+        val status = mock<Atc3StatusV1>()
+        whenever(status.deliveredTodayUnits).thenReturn(counter)
+        atc3Pump.lastStatus = status
+        atc3Pump.statusReadAtMs = now
+        atc3Pump.snapshotAtMs = now
+        atc3Pump.deliveredTodayUnits = counter
+        whenever(atc3Manager.readStatus()).thenReturn(true)
+        whenever(atc3Manager.readTbrHistory()).thenReturn(emptyList())
+        runBlocking {
+            whenever(aapsJournal.rowsBetween(any(), any())).thenReturn(emptyList())
+            whenever(atc3HistorySync.writeBasalFact(any(), any(), any(), any(), anyOrNull(), any())).thenReturn(true)
+        }
+    }
+
+    /** A paired pump whose last status read was this long ago, with that answer on disk as a tick leaves it. */
+    private fun pumpSilentFor(minutes: Long) {
+        startPlugin()
+        whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("A1B2C3")
+        val answered = now - minutes * 60_000L
+        atc3Pump.lastConnection = answered
+        whenever(preferences.get(Atc3StringNonKey.LastAnswer)).thenReturn(Atc3LinkWatch.Stop(answered, 10.0).encode())
+    }
+
+    @Test
+    fun `a pump that answered ten minutes ago is left alone`() = runTest {
+        pumpSilentFor(10)
+
+        plugin.checkLink()
+
+        verify(uiInteraction, never()).addNotificationWithSound(any(), any(), any(), anyOrNull())
+        verify(atc3HistorySync, never()).recordLinkStop(any(), any())
+    }
+
+    @Test
+    fun `a quarter of an hour without an answer is told once, aloud, and nothing is held yet`() = runTest {
+        pumpSilentFor(16)
+
+        plugin.checkLink()
+        plugin.checkLink()
+
+        verify(uiInteraction, times(1)).addNotificationWithSound(eq(Notification.PUMP_UNREACHABLE), any(), eq(Notification.URGENT), anyOrNull())
+        verify(preferences, never()).put(eq(Atc3StringNonKey.LinkStop), any<String>())
+        verify(atc3HistorySync, never()).recordLinkStop(any(), any())
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
+    }
+
+    @Test
+    fun `half an hour without an answer holds the pump stopped from its last answer and stops the loop`() = runTest {
+        pumpSilentFor(31)
+        val answered = now - 31 * 60_000L
+
+        plugin.checkLink()
+
+        verify(preferences).put(Atc3StringNonKey.LinkStop, Atc3LinkWatch.Stop(answered, 10.0).encode())
+        // No basal from the last answer on, as far as the next telling.
+        verify(atc3HistorySync).recordLinkStop(answered, 31 * 60_000L + Atc3LinkWatch.ALARM_AFTER_MS)
+        verify(uiInteraction, times(1)).addNotificationWithSound(eq(Notification.PUMP_UNREACHABLE), any(), eq(Notification.URGENT), anyOrNull())
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
+    }
+
+    @Test
+    fun `the silence asks the queue for a status, which is what finds the pump`() = runTest {
+        pumpSilentFor(16)
+
+        plugin.checkLink()
+
+        verify(commandQueue, times(1)).readStatus(any(), anyOrNull())
+    }
+
+    @Test
+    fun `a pump held stopped for want of an answer stops the loop`() = runTest {
+        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(lastAnswer(), 10.0).encode())
+
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
+    }
+
+    @Test
+    fun `the answer that ends the stop writes the silence by the pump's count and lets the loop go on`() = runTest {
+        val from = lastAnswer()
+        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(from, 10.0).encode())
+        // The count went on by 3 U, and a bolus of 1 U was given on the pump meanwhile.
+        pumpAnswersWithCount(13.0)
+        whenever(atc3HistorySync.bolusesLearnedAfter(from)).thenReturn(1.0)
+
+        plugin.getPumpStatus("test")
+
+        verify(atc3HistorySync).recordLinkStop(from, now - from)
+        verify(atc3HistorySync).writeBasalFact(eq(from), eq(now), eq(2.0), any(), anyOrNull(), eq(0))
+        verify(preferences).put(Atc3StringNonKey.LinkStop, "")
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
+    }
+
+    @Test
+    fun `a count that began anew writes the silence as no basal and says so`() = runTest {
+        val from = lastAnswer()
+        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(from, 13.6).encode())
+        pumpAnswersWithCount(0.0)
+
+        plugin.getPumpStatus("test")
+
+        verify(atc3HistorySync).writeBasalFact(eq(from), eq(now), eq(0.0), any(), anyOrNull(), eq(0))
+        verify(uiInteraction).addNotification(eq(Notification.WRONG_PUMP_DATA), any(), eq(Notification.NORMAL))
+    }
+
+    @Test
+    fun `a stretch that cannot be written yet leaves the stop standing`() = runTest {
+        val from = lastAnswer()
+        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(from, 10.0).encode())
+        pumpAnswersWithCount(13.0)
+        runBlocking { whenever(atc3HistorySync.writeBasalFact(any(), any(), any(), any(), anyOrNull(), any())).thenReturn(false) }
+
+        plugin.getPumpStatus("test")
+
+        verify(preferences, never()).put(Atc3StringNonKey.LinkStop, "")
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
+    }
+
+    @Test
+    fun `every status read is kept as the answer a silence would be counted from`() = runTest {
+        pumpAnswersWithCount(13.0)
+
+        plugin.getPumpStatus("test")
+
+        verify(preferences).put(Atc3StringNonKey.LastAnswer, Atc3LinkWatch.Stop(now, 13.0).encode())
     }
 }

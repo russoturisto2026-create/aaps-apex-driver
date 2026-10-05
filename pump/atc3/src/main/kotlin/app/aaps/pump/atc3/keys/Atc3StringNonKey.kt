@@ -19,14 +19,9 @@ enum class Atc3StringNonKey(
     HistoryLedger("atc3_history_ledger", ""),
 
     /**
-     * The anchor of the delivery check, see [app.aaps.pump.atc3.history.Atc3StateCheck.encode]. Kept
-     * across a restart, so that what the journal owes since the anchor is not lost with the process.
-     */
-    CheckAnchor("atc3_check_anchor", ""),
-
-    /**
-     * The boluses learned since the anchor, see [app.aaps.pump.atc3.history.Atc3HistorySync]. Kept with
-     * the anchor: the one is counted from the other.
+     * The boluses learned of late, see [app.aaps.pump.atc3.history.Atc3HistorySync]. Kept across a restart:
+     * a half hour of the exact basal mode and a stop for want of an answer are both counted from a
+     * read before it.
      */
     CheckLearned("atc3_check_learned", ""),
 
@@ -36,4 +31,18 @@ enum class Atc3StringNonKey(
      * counted from a read of the pump's count, and that read cannot be had again.
      */
     BasalPeriod("atc3_basal_period", ""),
+
+    /**
+     * The pump's last answer: the moment of the status read and the pump's count in it, see
+     * [app.aaps.pump.atc3.history.Atc3LinkWatch.Stop]. Kept across a restart, so that a pump found gone
+     * when AAPS comes back still has a read its silence is counted from.
+     */
+    LastAnswer("atc3_last_answer", ""),
+
+    /**
+     * The stop the pump is held in for want of an answer, see [app.aaps.pump.atc3.history.Atc3LinkWatch];
+     * empty when there is none. Kept across a restart: the loop stays stopped and the stretch is
+     * still to be written when the pump answers.
+     */
+    LinkStop("atc3_link_stop", ""),
 }

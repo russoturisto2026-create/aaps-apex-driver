@@ -50,7 +50,13 @@ class Atc3Pump @Inject constructor() {
      * the pump's midnight -- its boluses, its temporary basals, the scheduled rate in between --
      * and what the pump's own count says. For the driver's screen; null until compared once.
      */
-    data class DayAccount(val aapsUnits: Double, val pumpUnits: Double, val atMs: Long)
+    data class DayAccount(
+        val aapsUnits: Double,
+        val pumpUnits: Double,
+        val atMs: Long,
+        /** Where the two are counted from when that is not the pump's midnight: the last beginning. */
+        val sinceMs: Long? = null
+    )
 
     var dayAccount: DayAccount? = null
 
@@ -165,12 +171,6 @@ class Atc3Pump @Inject constructor() {
      * the difference between a link the user can protect and one nobody can.
      */
     var version: Atc3Version? = null
-
-    /**
-     * True when the firmware is older than [Atc3Const.MINIMUM_FIRMWARE], which the driver refuses
-     * to run a pump on. False until the version has been read.
-     */
-    val firmwareTooOld: Boolean get() = version?.isAtLeast(Atc3Const.MINIMUM_FIRMWARE) == false
 
     /**
      * The pump's own settings, null until Status V1 has been read.

@@ -28,6 +28,7 @@ class Atc3AlarmTest {
         assertThat(Atc3Alarm.ofCode(2)).isEqualTo(Atc3Alarm.BLOOD_GLUCOSE_REMINDER)
         assertThat(Atc3Alarm.ofCode(3)).isEqualTo(Atc3Alarm.BUTTON_ERROR)
         assertThat(Atc3Alarm.ofCode(8)).isEqualTo(Atc3Alarm.NO_DELIVERY)
+        assertThat(Atc3Alarm.ofCode(11)).isEqualTo(Atc3Alarm.MOTOR_ERROR)
         assertThat(Atc3Alarm.ofCode(13)).isEqualTo(Atc3Alarm.RESERVOIR_EMPTY)
     }
 

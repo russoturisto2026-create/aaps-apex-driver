@@ -44,6 +44,8 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
     @BeforeEach
     fun setup() {
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("12345678")
+        // A password is entered: without one the driver asks the pump nothing, which is not what these are about.
+        whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         whenever(preferences.get(Atc3BooleanKey.HoldLink)).thenReturn(true)
         whenever(atc3BLE.write(any())).thenReturn(false)
         manager = Atc3Manager(

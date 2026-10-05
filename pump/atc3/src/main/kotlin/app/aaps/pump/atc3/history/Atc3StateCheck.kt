@@ -29,9 +29,11 @@ import kotlin.math.abs
  * on the same side for [STUCK_READS] reads running, more than [STUCK_UNITS] out, is not that: it is
  * something that began and ended between two reads, and it is reported as a disagreement.
  *
- * **The anchor outlives a restart.** The caller keeps it on disk, [encode] and [restore]. A new pump
- * and the pump's midnight -- the count starts again from nothing -- leave the check with nothing to
- * compare against, which the caller answers by reading everything and accepting.
+ * **Nothing is compared across a beginning.** A start of AAPS, the pump back after a stop for want
+ * of an answer, a refill, a new pump, the pump's midnight and a count that began anew inside the
+ * day all leave the check with nothing to compare against, which the caller answers by reading
+ * everything and accepting. What went on while AAPS was not looking is taken from the pump's
+ * journals, not worked out of its count.
  *
  * **This class decides nothing.** It says whether the two sides agree and by how much they do not.
  * What to read and what to correct belongs to the caller.
@@ -170,26 +172,6 @@ class Atc3StateCheck {
 
     @Synchronized
     fun baseline(): Baseline? = baseline
-
-    /** The anchor as one line for storage, empty when there is none. See [restore]. */
-    @Synchronized
-    fun encode(): String = baseline?.let { "${it.readMs};${it.counterUnits};${it.learnedAfterMs}" } ?: ""
-
-    /**
-     * Take back an anchor stored by [encode], when there is none in memory: after a restart the
-     * account goes on from where it stood. [baselineFor] still drops it on the next read when the
-     * pump's midnight or a count that went backwards came between.
-     */
-    @Synchronized
-    fun restore(text: String): Boolean {
-        if (baseline != null) return false
-        val parts = text.split(';')
-        val readMs = parts.getOrNull(0)?.toLongOrNull() ?: return false
-        val counter = parts.getOrNull(1)?.toDoubleOrNull() ?: return false
-        val learnedAfterMs = parts.getOrNull(2)?.toLongOrNull() ?: readMs
-        baseline = Baseline(readMs, counter, learnedAfterMs)
-        return true
-    }
 
     @Synchronized
     fun unexplainedRuns(): Int = unexplainedRuns

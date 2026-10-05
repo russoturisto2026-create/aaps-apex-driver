@@ -44,10 +44,15 @@ import javax.inject.Singleton
  * Each step is driven by the callback of the one before it, so nothing waits on the stack's own
  * thread, and the connect watchdog covers the whole chain rather than only its first step.
  *
- * With no password configured the first three steps are skipped and the link comes up without
- * authorising, which is what a pump that asks for no password wants — and a pump that lets that
- * happen has told the driver, unambiguously, that it is asking for no password, which is how
- * [linkProtection] is arrived at without ever guessing a value.
+ * A password is always presented, and the pump's answer to it is the only thing [linkProtection]
+ * is read from: `000000` is the pump's own way of having none, which a pump without a password
+ * accepts and one with a password refuses. With none entered in AAPS the manager does not bring a
+ * link up at all, see [app.aaps.pump.atc3.manager.Atc3Manager.connect].
+ *
+ * Being let in without presenting one says nothing about the pump. The pump accepts a link, not
+ * a client: on the bench, 2026-10-05, with the vendor's application holding the link open under
+ * the right password, the driver subscribed without presenting any, worked for half an hour, and
+ * told the user the pump had no password. It had one.
  *
  * See [GattAttributes].
  */
@@ -195,21 +200,20 @@ class Atc3BLE @Inject constructor(
     private var authNotifyCharacteristic: BluetoothGattCharacteristic? = null
 
     /**
-     * The Bluetooth password to present, or null to bring the link up without authorising.
+     * The Bluetooth password to present: the one entered in AAPS, or `000000` when none is.
      *
      * Set before every connection by whoever knows the configuration; the transport itself holds no
-     * settings. Null means present nothing at all, and the link comes up without authorising.
+     * settings.
      */
-    @Volatile private var password: String? = null
+    @Volatile private var password: String = Atc3BtPassword.NONE
 
     /**
      * How well the current link is protected, as the pump itself answered while it came up.
      *
-     * Read off what the pump did rather than off what is configured, because only the pump knows
-     * whether it is asking for a password. It says so in two ways, both of them unambiguous: a pump
-     * with no authorisation service cannot be asking for one at all, and a pump that lets an
-     * unauthorised client subscribe to its notify characteristic is not asking for one either — that
-     * write is exactly what it refuses when it is.
+     * Read off what the pump answered rather than off what is configured, because only the pump
+     * knows whether it is asking for a password. It says so in two ways: a pump with no
+     * authorisation service cannot be asking for one at all, and a pump that accepts `000000` has
+     * none set. Nothing else says it, see the class.
      */
     @Volatile
     var linkProtection: Atc3LinkProtection = Atc3LinkProtection.UNKNOWN
@@ -269,13 +273,11 @@ class Atc3BLE @Inject constructor(
     /**
      * Say which Bluetooth password to present while bringing the next link up.
      *
-     * A blank or malformed value is taken as "no password", which brings the link up without
-     * authorising.
-     * That is the honest thing to do with nothing configured: presenting a made up password would
-     * turn a pump that asks for none into one that refuses us.
+     * A blank or malformed value is taken as nothing entered, and `000000` is presented: what a
+     * pump without a password expects, and what a pump with one refuses.
      */
     fun setPassword(password: String?) {
-        this.password = password?.trim()?.takeIf { Atc3BtPassword.isValid(it) }
+        this.password = password?.trim()?.takeIf { Atc3BtPassword.isValid(it) } ?: Atc3BtPassword.NONE
     }
 
     /**
@@ -920,17 +922,15 @@ class Atc3BLE @Inject constructor(
             // Authorising has to come first: with a password set, the pump answers the write that
             // enables notifications on the ATC3 characteristic with Write Not Permitted until it
             // has accepted one.
-            if (password != null && authNotify != null && authWriteCharacteristic != null) {
+            if (authNotify != null && authWriteCharacteristic != null) {
                 aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: characteristics resolved, authorising")
                 subscribe(gatt, authNotify, OP_SUBSCRIBE_AUTH)
                 return
             }
-            if (password != null) {
-                // Configured to authorise but the pump has no such service. Carrying on is right:
-                // a pump that does not offer it cannot be asking for a password either.
-                aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: no authorisation service on this pump, connecting without one")
-                trace.event(Atc3TraceCat.BLE, "auth_absent")
-            }
+            // The pump has no such service. Carrying on is right: a pump that does not offer it
+            // cannot be asking for a password either.
+            aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: no authorisation service on this pump, connecting without one")
+            trace.event(Atc3TraceCat.BLE, "auth_absent")
             aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: characteristics resolved, subscribing")
             subscribe(gatt, notify, OP_SUBSCRIBE_DATA)
         }
@@ -961,11 +961,6 @@ class Atc3BLE @Inject constructor(
             if (subscribed == GattAttributes.characteristicAuthNotifyUuid) {
                 writePassword(gatt)
                 return
-            }
-            // Subscribing here is the write a pump asking for a password refuses. Getting it
-            // through without having presented one is the pump saying it asks for none.
-            if (password == null && linkProtection == Atc3LinkProtection.UNKNOWN) {
-                linkProtection = Atc3LinkProtection.UNPROTECTED
             }
             watchdog?.cancel(false)
             watchdog = null
@@ -1074,7 +1069,7 @@ class Atc3BLE @Inject constructor(
     private fun writePassword(gatt: BluetoothGatt) {
         val characteristic = authWriteCharacteristic
         val configured = password
-        if (characteristic == null || configured == null) {
+        if (characteristic == null) {
             endConnection("characteristics missing")
             return
         }

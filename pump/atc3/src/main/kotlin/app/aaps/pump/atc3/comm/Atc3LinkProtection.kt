@@ -8,9 +8,10 @@ package app.aaps.pump.atc3.comm
  * rather than for the client that earned it. A pump with no password set therefore takes commands
  * from whoever asks first, which is worth telling the user about.
  *
- * The state is worked out from what the pump did while the link was coming up rather than from
- * what is configured, because only the pump knows whether it is asking for a password: it answers
- * `000000` with "accepted" when it has none set, and refuses it when it has.
+ * The state is worked out from what the pump answered while the link was coming up rather than
+ * from what is configured, because only the pump knows whether it is asking for a password: it
+ * answers `000000` with "accepted" when it has none set, and refuses it when it has. A password
+ * is always presented, `000000` when none is entered, so there is always such an answer.
  */
 enum class Atc3LinkProtection {
 

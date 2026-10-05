@@ -43,6 +43,8 @@ class Atc3ManagerDeadLinkTest : TestBaseWithProfile() {
         // No serial, so nothing can be built or sent and every exchange fails at the first step -
         // which is exactly the "reached nobody" outcome under test.
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("")
+        // A password is entered: without one the driver asks the pump nothing, which is not what these are about.
+        whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         whenever(atc3BLE.write(any())).thenReturn(false)
         whenever(atc3BLE.isConnected).thenReturn(true)
         manager = Atc3Manager(

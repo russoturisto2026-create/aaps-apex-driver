@@ -304,6 +304,7 @@ class Atc3Fragment : DaggerFragment() {
         updateDeliveryState(binding)
         updateSettingsRows(binding)
         updateDayAccount(binding)
+        binding.atc3ScreenStatus.atc3DriverVersionValue.text = Atc3Const.DRIVER_VERSION
         updateSaveBar(binding)
     }
 
@@ -313,6 +314,10 @@ class Atc3Fragment : DaggerFragment() {
      * The journal's sum is rates over time and comes out between the pump's steps; it is shown on
      * the nearest step, so that the difference is one the pump could have delivered or not, and a
      * thousandth of a unit is not shown as one.
+     *
+     * Counted from the pump's midnight, or from the last beginning of the day -- a start of AAPS,
+     * a refill, the pump back after a stop or with its count at nothing -- and then it says since
+     * when.
      */
     private fun updateDayAccount(binding: Atc3FragmentBinding) {
         val day = atc3Pump.dayAccount
@@ -320,7 +325,9 @@ class Atc3Fragment : DaggerFragment() {
             if (day == null) rh.gs(R.string.atc3_halo_day_account_none)
             else {
                 val aapsUnits = Math.round(day.aapsUnits / Atc3Const.DOSE_SCALE) * Atc3Const.DOSE_SCALE
-                rh.gs(R.string.atc3_halo_day_account_value, aapsUnits, day.pumpUnits, day.pumpUnits - aapsUnits)
+                val since = day.sinceMs
+                if (since == null) rh.gs(R.string.atc3_halo_day_account_value, aapsUnits, day.pumpUnits, day.pumpUnits - aapsUnits)
+                else rh.gs(R.string.atc3_halo_day_account_value_since, aapsUnits, day.pumpUnits, day.pumpUnits - aapsUnits, dateUtil.timeString(since))
             }
     }
 

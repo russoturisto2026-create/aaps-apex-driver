@@ -639,19 +639,22 @@ object Atc3Const {
     }
 
     /**
-     * The firmware from which the pump has a Bluetooth password at all.
+     * The version of this driver, shown on its screen and written to the log when it starts.
      *
-     * Older firmware has no password menu and no authorisation service, so its link cannot be
-     * protected by any means the driver has; the only cure is a firmware update.
+     * Kept by hand and raised with every change to the driver: the date of the change, and which
+     * change of that day it is. It travels with the code, so the same driver reads the same in
+     * every build it is merged or copied into, which a commit id does not.
      */
-    val PASSWORD_FIRMWARE = listOf(1, 1, 1, 0)
+    const val DRIVER_VERSION = "2026.10.05.8"
 
     /**
-     * The oldest firmware this driver will work with. Older firmware has no Bluetooth password at
-     * all: anything within radio range can command the pump, and nothing the driver does can change
-     * that. Such a pump is refused, and the user is told to have the firmware updated.
+     * The firmware from which the pump has a Bluetooth password at all.
+     *
+     * Older firmware has no password menu and works under `000000` and nothing else, so its link
+     * cannot be protected by any means the driver has; the only cure is a firmware update. Such a
+     * pump is run all the same, under a standing warning, the way a pump set to `000000` is.
      */
-    val MINIMUM_FIRMWARE = listOf(1, 1, 1)
+    val PASSWORD_FIRMWARE = listOf(1, 1, 1, 0)
 
     /** One raw unit of the battery reading, in volts. */
     const val BATTERY_VOLTAGE_SCALE = 0.01

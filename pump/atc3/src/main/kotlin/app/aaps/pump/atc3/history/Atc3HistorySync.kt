@@ -275,18 +275,20 @@ class Atc3HistorySync @Inject constructor(
      * A refill record is written when a reservoir is put in and the set is filled; its amount is
      * the fill of the set, which leaves the reservoir and is counted nowhere else. The first read
      * imports nothing and only says where recording starts.
+     *
+     * @return how many refills were new
      */
-    suspend fun recordRefills(records: List<Atc3RefillRecord>) {
-        if (records.isEmpty()) return
+    suspend fun recordRefills(records: List<Atc3RefillRecord>): Int {
+        if (records.isEmpty()) return 0
         val newest = records.maxOf { it.utcSeconds }
         val watermark = preferences.get(Atc3LongNonKey.LastRefillSeconds)
         if (watermark == 0L) {
             preferences.put(Atc3LongNonKey.LastRefillSeconds, newest)
             aapsLogger.debug(LTag.PUMP, "ATC3: ${records.size} refill(s) already on the pump, none imported; AAPS starts recording refills from here")
-            return
+            return 0
         }
-        if (newest <= watermark) return
-        if (!ensureRegistered()) return
+        if (newest <= watermark) return 0
+        if (!ensureRegistered()) return 0
         val fresh = records.filter { it.utcSeconds > watermark }.sortedBy { it.utcSeconds }
         for (record in fresh) {
             val stored = pumpSync.insertTherapyEventIfNewWithTimestamp(
@@ -301,6 +303,7 @@ class Atc3HistorySync @Inject constructor(
         }
         preferences.put(Atc3LongNonKey.LastRefillSeconds, newest)
         trace.event(Atc3TraceCat.HIST, "refills", "new" to fresh.size, "newest" to newest)
+        return fresh.size
     }
 
     private fun alarmNote(record: Atc3AlarmRecord): String =
@@ -1408,12 +1411,32 @@ class Atc3HistorySync @Inject constructor(
         return true
     }
 
+    /**
+     * The stop a pump is held in for want of an answer, see [Atc3LinkWatch]: no basal from its last
+     * answer at [startMs] on. Written again as the silence goes on, under the one id, and for the
+     * last time when the pump answers -- then up to that read, where [writeBasalFact] takes the row
+     * out and puts the pump's own account of the stretch in its place.
+     *
+     * Not in the ledger: the ledger holds what the pump runs, and this is AAPS not knowing.
+     */
+    suspend fun recordLinkStop(startMs: Long, durationMs: Long) {
+        if (durationMs <= 0L || !ensureRegistered()) return
+        val pumpId = Atc3PumpId.of(startMs, Atc3PumpId.KIND_LINK_STOP)
+        trace.event(Atc3TraceCat.TBR, "link_stop", "at" to startMs, "s" to durationMs / 1000, "id" to pumpId)
+        pumpSync.syncTemporaryBasalWithPumpId(
+            timestamp = startMs, rate = 0.0, duration = durationMs, isAbsolute = true,
+            type = PumpSync.TemporaryBasalType.PUMP_SUSPEND, pumpId = pumpId, pumpType = PumpType.ATC3, pumpSerial = serial
+        )
+    }
+
     /** Forget everything: another pump, or the same pump paired afresh. */
     fun forgetPump(newSerial: String) {
         lastReconciledAtMs = 0L
         lastStatusAtMs = 0L
         loadedFor = newSerial
         preferences.put(Atc3StringNonKey.BasalPeriod, "")
+        preferences.put(Atc3StringNonKey.LastAnswer, "")
+        preferences.put(Atc3StringNonKey.LinkStop, "")
         store(Atc3HistoryLedger(serial = newSerial))
         aapsLogger.debug(LTag.PUMP, "ATC3: history ledger cleared for a new pump")
     }

@@ -39,6 +39,15 @@ enum class Atc3Alarm(val code: Int) {
      */
     NO_DELIVERY(8),
 
+    /**
+     * Motor error.
+     *
+     * On the bench, 2026-10-05, raised as a new battery went into a pump that had stood for hours
+     * on a dead one, and the pump's count of the day came back at nothing with it. The same day
+     * the pump kept its count through eleven minutes without a battery, and raised no such alarm.
+     */
+    MOTOR_ERROR(11),
+
     /** Reservoir empty. */
     RESERVOIR_EMPTY(13),
 

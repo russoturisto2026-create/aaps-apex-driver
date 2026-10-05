@@ -62,6 +62,7 @@ import app.aaps.pump.atc3.history.Atc3ClockWatch
 import app.aaps.pump.atc3.history.Atc3DayClock
 import app.aaps.pump.atc3.history.Atc3StateCheck
 import app.aaps.pump.atc3.history.Atc3HistorySync
+import app.aaps.pump.atc3.history.Atc3LinkWatch
 import app.aaps.pump.atc3.history.Atc3TbrTracker
 import app.aaps.pump.atc3.history.LoopTbr
 import app.aaps.pump.atc3.manager.Atc3BolusOutcome
@@ -85,6 +86,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * AAPS pump driver for ATC3.
@@ -143,6 +146,48 @@ class Atc3PumpPlugin @Inject constructor(
 
     /** The reservoir at the previous tick, for noticing that it went up. */
     private var reservoirSeenUnits = -1.0
+
+    /** Phone clock when this process began to watch for the pump's answers: silence is counted from here until the first. */
+    private val linkWatchedSinceMs = dateUtil.now()
+
+    /** The look, once a minute, for a pump that has stopped answering, see [watchLink]. */
+    private var linkWatch: Job? = null
+
+    /** How many times the user has been told of the silence under way. */
+    private var linkAlarmsSaid = 0
+
+    /**
+     * Keeps the watch, which runs on a timer of its own, and the read that ends a silence from
+     * writing the stop's row at one moment. The watch asks nothing of the pump under it.
+     */
+    private val linkLock = Mutex()
+
+    /** The stop the pump is held in for want of an answer, as on disk, see [linkStop]. */
+    @Volatile private var linkStopHeld: Atc3LinkWatch.Stop? = null
+    @Volatile private var linkStopLoaded = false
+
+    /** Why a comparison had nothing to compare against, and whether that is a beginning, see [checkState]. */
+    private enum class NoBase(val trace: String, val begins: Boolean) {
+        FIRST("first", true),
+        REFILL("refill", true),
+        LINK_BACK("link_back", true),
+        COUNT_RESET("count_reset", true),
+        TIME_BACK("time_back", true),
+        MIDNIGHT("midnight", true),
+        BOLUS_STRADDLES("bolus_straddles_anchor", false),
+        NO_PROFILE("no_profile", false)
+    }
+
+    /** Set by the comparison that came back with nothing to compare against, for [noteBeginning]. */
+    private var noBase: NoBase? = null
+
+    /** True from a refill being seen until the comparison of the same tick has started anew from it. */
+    private var refilled = false
+
+    /** The read the day's account on the screen is counted from, when that is not the pump's midnight. */
+    private data class DayBase(val readMs: Long, val counterUnits: Double)
+
+    private var dayBase: DayBase? = null
 
     /**
      * True while the alarm notification raised here is the one on screen.
@@ -239,6 +284,156 @@ class Atc3PumpPlugin @Inject constructor(
         }
     }
 
+    /**
+     * Look once a minute for a pump that has stopped answering, see [Atc3LinkWatch]: the user is
+     * told at a quarter of an hour of silence and at every quarter after, and at half an hour the
+     * pump is held to be stopped. Nothing is asked of the pump from here: the queue is asked for a
+     * status, and that read is what finds the pump when it is back.
+     */
+    private fun watchLink() {
+        if (linkWatch?.isActive == true) return
+        linkWatch = pluginScope.launch {
+            while (isActive) {
+                delay(LINK_WATCH_MS)
+                try {
+                    checkLink()
+                } catch (e: Exception) {
+                    if (!isActive) throw e
+                    aapsLogger.error(LTag.PUMP, "ATC3: the look for the pump's answer failed", e)
+                }
+            }
+        }
+    }
+
+    /** One look of [watchLink]. Not private only so that a test can take the look without the wait. */
+    internal suspend fun checkLink() {
+        if (!isEnabled() || preferences.get(Atc3StringKey.Atc3SerialNumber).isBlank()) return
+        var silent = false
+        linkLock.withLock {
+            val now = dateUtil.now()
+            val silence = now - (atc3Pump.lastConnection.takeIf { it > 0L } ?: linkWatchedSinceMs)
+            val due = Atc3LinkWatch.alarmsDue(silence)
+            if (due == 0) {
+                // The pump answers. A stop still open is closed by the read that found it, not here.
+                if (linkAlarmsSaid > 0) {
+                    linkAlarmsSaid = 0
+                    rxBus.send(EventDismissNotification(Notification.PUMP_UNREACHABLE))
+                }
+                return@withLock
+            }
+            silent = true
+            var stop = linkStop()
+            if (stop == null && Atc3LinkWatch.stopDue(silence)) stop = holdLinkStop(now)
+            if (due <= linkAlarmsSaid) return@withLock
+            linkAlarmsSaid = due
+            val minutes = (silence / 60_000L).toInt()
+            aapsLogger.error(LTag.PUMP, "ATC3: no answer from the pump for $minutes min" + if (stop != null) ", it is held to be stopped" else "")
+            trace.event(Atc3TraceCat.DRV, "link_silent", "min" to minutes, "times" to due, "stopped" to (stop != null))
+            uiInteraction.addNotificationWithSound(
+                Notification.PUMP_UNREACHABLE,
+                // A silence of the driver's own making is called what it is.
+                if (!atc3Manager.isPasswordEntered) rh.gs(R.string.atc3_password_missing)
+                else rh.gs(if (stop != null) R.string.atc3_link_stopped else R.string.atc3_link_silent, minutes),
+                Notification.URGENT,
+                app.aaps.core.ui.R.raw.alarm
+            )
+            // No basal from the last answer on. The row is drawn out as far as the next telling,
+            // so that the time in between is not credited the scheduled rate.
+            stop?.let { atc3HistorySync.recordLinkStop(it.fromReadMs, now - it.fromReadMs + Atc3LinkWatch.ALARM_AFTER_MS) }
+        }
+        if (silent) commandQueue.readStatus(rh.gs(R.string.atc3_link_wait), null)
+    }
+
+    /** The stop the pump is held in for want of an answer, or null when there is none. */
+    private fun linkStop(): Atc3LinkWatch.Stop? {
+        if (!linkStopLoaded) {
+            linkStopHeld = Atc3LinkWatch.Stop.decode((preferences.get(Atc3StringNonKey.LinkStop) as String?).orEmpty())
+            linkStopLoaded = true
+        }
+        return linkStopHeld
+    }
+
+    /**
+     * Half an hour without an answer: the pump is held to be stopped from its last answer on.
+     *
+     * The last answer is the one a tick put on disk, a moment and a count read together. A pump
+     * never heard from has none, and one last heard from over a day ago is not a pump that has
+     * just gone: neither is held to anything, and the answer that comes is a beginning as any.
+     * Nor is one whose answer on disk is fresh: it answered while this was being looked at.
+     */
+    private fun holdLinkStop(now: Long): Atc3LinkWatch.Stop? {
+        val stop = Atc3LinkWatch.Stop.decode((preferences.get(Atc3StringNonKey.LastAnswer) as String?).orEmpty()) ?: return null
+        if (now - stop.fromReadMs > DAY_MS || !Atc3LinkWatch.stopDue(now - stop.fromReadMs)) return null
+        preferences.put(Atc3StringNonKey.LinkStop, stop.encode())
+        linkStopHeld = stop
+        linkStopLoaded = true
+        trace.event(Atc3TraceCat.DRV, "link_stop", "from" to stop.fromReadMs, "counter" to stop.fromCounterUnits)
+        return stop
+    }
+
+    /**
+     * The pump has answered after being held stopped for want of an answer: the time since its
+     * last answer is written as the pump itself accounts for it, see [Atc3LinkWatch.account], and
+     * the stop is over. The bolus journal has been read by now, so a bolus given on the pump in
+     * the meantime is in AAPS and out of what is left as basal.
+     *
+     * @return false when a row could not be written at this read: the stop stays, and the next
+     *   read asks again
+     */
+    private suspend fun closeLinkStop(status: Atc3StatusV1): Boolean = linkLock.withLock {
+        val stop = linkStop() ?: return@withLock true
+        val readMs = atc3Pump.statusReadAtMs
+        if (readMs > stop.fromReadMs) {
+            val midnight = Atc3DayClock.dayStartOf(readMs)
+            val dayBefore = stop.fromReadMs < midnight && Atc3DayClock.sameDay(stop.fromReadMs + DAY_MS, readMs)
+            val account = Atc3LinkWatch.account(
+                stop, readMs, status.deliveredTodayUnits,
+                bolusUnits = atc3HistorySync.bolusesLearnedAfter(stop.fromReadMs),
+                midnightMs = midnight,
+                dayTotalUnits = if (dayBefore) dayTotalOf(stop.fromReadMs) else null,
+                bolusSinceMidnightUnits = if (stop.fromReadMs < midnight) aapsJournal.bolusesBetween(midnight, readMs) else 0.0
+            )
+            // The stop's own row ends at this read, and the pump's account takes its place.
+            atc3HistorySync.recordLinkStop(stop.fromReadMs, readMs - stop.fromReadMs)
+            val pumpTbrDurationMs =
+                if (atc3Pump.tbrActive && !atc3Pump.notDelivering) atc3Pump.tbrDurationMinutes.takeIf { it > 0 }?.let { it * 60_000L } else null
+            for (stretch in account.stretches) {
+                val rows = aapsJournal.rowsBetween(stretch.fromMs, stretch.toMs)
+                if (!atc3HistorySync.writeBasalFact(stretch.fromMs, stretch.toMs, stretch.units, rows, pumpTbrDurationMs)) {
+                    trace.event(Atc3TraceCat.HIST, "link_back", "ok" to false, "from" to stretch.fromMs, "to" to stretch.toMs)
+                    return@withLock false
+                }
+            }
+            val minutes = ((readMs - stop.fromReadMs) / 60_000L).toInt()
+            val units = account.stretches.sumOf { it.units }
+            aapsLogger.warn(LTag.PUMP, "ATC3: the pump is back after $minutes min, ${account.outcome}, $units U of basal over that time")
+            trace.event(
+                Atc3TraceCat.HIST, "link_back",
+                "ok" to true, "from" to stop.fromReadMs, "to" to readMs, "outcome" to account.outcome.name.lowercase(), "basal" to units
+            )
+            when (account.outcome) {
+                Atc3LinkWatch.Outcome.COUNTED                 -> Unit
+
+                Atc3LinkWatch.Outcome.COUNT_RESET             ->
+                    uiInteraction.addNotification(Notification.WRONG_PUMP_DATA, rh.gs(R.string.atc3_link_back_reset, minutes), Notification.NORMAL)
+
+                Atc3LinkWatch.Outcome.BEFORE_MIDNIGHT_UNKNOWN ->
+                    uiInteraction.addNotification(Notification.WRONG_PUMP_DATA, rh.gs(R.string.atc3_link_back_midnight, minutes), Notification.URGENT)
+            }
+        }
+        preferences.put(Atc3StringNonKey.LinkStop, "")
+        linkStopHeld = null
+        linkAlarmsSaid = 0
+        rxBus.send(EventDismissNotification(Notification.PUMP_UNREACHABLE))
+        // In the exact basal mode the half hour under way begins at this read: what lies before
+        // it is written.
+        if (preferences.get(Atc3BooleanKey.ExactBasal)) {
+            val state = Atc3BasalPeriod.State.decode((preferences.get(Atc3StringNonKey.BasalPeriod) as String?).orEmpty())
+            beginBasalPeriod(status, state.closed?.copy(checked = true), "link_back")
+        }
+        true
+    }
+
     /** What the pump's temporary basal journal answers, handed to the history sync at every close. */
     private val journal: () -> List<Atc3TbrRecord>? = { atc3Manager.readTbrHistory() }
 
@@ -275,6 +470,7 @@ class Atc3PumpPlugin @Inject constructor(
      */
     override fun onStart() {
         super.onStart()
+        aapsLogger.debug(LTag.PUMP, "ATC3: driver version ${Atc3Const.DRIVER_VERSION}")
         disposable += rxBus
             .toObservable(EventAPSCalculationFinished::class.java)
             .observeOn(aapsSchedulers.io)
@@ -288,10 +484,12 @@ class Atc3PumpPlugin @Inject constructor(
             .observeOn(aapsSchedulers.io)
             .subscribe({ readStateIfStale("glucose", Atc3Const.STATUS_STALE_MS) }, fabricPrivacy::logException)
         watchHalfHours()
+        watchLink()
     }
 
     override fun onStop() {
         halfHourWatch?.cancel()
+        linkWatch?.cancel()
         disposable.clear()
         super.onStop()
     }
@@ -418,13 +616,9 @@ class Atc3PumpPlugin @Inject constructor(
             trace.event(Atc3TraceCat.DRV, "status.end", "ok" to false, "why" to "connecting", "ms" to trace.since(startedAt))
             return
         }
-        // 0. Which pump this is. Read once per link, before anything is asked of it: a pump on
-        // firmware without a Bluetooth password is not one this driver runs.
+        // 0. Which pump this is. Read once per link: a pump on firmware without a Bluetooth
+        // password is run all the same, under a warning, see [warnAboutUnprotectedLink].
         if (atc3Pump.version == null) atc3Manager.readVersion()
-        if (refuseOldFirmware()) {
-            trace.event(Atc3TraceCat.DRV, "status.end", "ok" to false, "why" to "firmware", "ms" to trace.since(startedAt))
-            return
-        }
         // The heartbeat the held link is watched by, on the period the watch expects. Once per link.
         atc3Manager.ensureHeartbeatPeriod()
         // 1. The one read the tick cannot go on without.
@@ -433,6 +627,8 @@ class Atc3PumpPlugin @Inject constructor(
             return
         }
         traceState()
+        // The answer a stop for want of one would be counted from, see [Atc3LinkWatch].
+        preferences.put(Atc3StringNonKey.LastAnswer, Atc3LinkWatch.Stop(atc3Pump.statusReadAtMs, atc3Pump.deliveredTodayUnits).encode())
 
         // 2. Alarms first. An alarm is the pump saying something is wrong, and everything that
         // follows is worth less than knowing it.
@@ -774,33 +970,38 @@ class Atc3PumpPlugin @Inject constructor(
      * what the AAPS journal accounts for since the last accepted read. See [Atc3StateCheck].
      */
     private suspend fun checkState(): Atc3StateCheck.Verdict {
+        noBase = null
         val status = atc3Pump.lastStatus ?: return Atc3StateCheck.Verdict.Unknown
         val readMs = atc3Pump.statusReadAtMs
         val counter = status.deliveredTodayUnits
-        // After a restart the account goes on from the anchor it stood at, see [anchorRestored].
-        if (!anchorRestored) {
-            anchorRestored = true
-            val stored: String = (preferences.get(Atc3StringNonKey.CheckAnchor) as String?).orEmpty()
-            if (stateCheck.restore(stored))
-                trace.event(Atc3TraceCat.HIST, "anchor_restored", "anchor" to (stateCheck.baseline()?.readMs ?: 0L))
-        }
+        // Nothing is compared across a beginning. A start of AAPS is one by itself: the anchor is
+        // not kept on disk, and the time AAPS was not there is the pump's journals' to tell. A
+        // refill, and the pump back after being held stopped for want of an answer, are the two
+        // the count does not show by itself.
+        val linkBack = linkStop() != null
+        if (linkBack || refilled) stateCheck.forget()
+        val before = stateCheck.baseline()
         val base = stateCheck.baselineFor(readMs, counter)
-            ?: return Atc3StateCheck.Verdict.Unknown.also {
-                storeAnchor()
-                trace.event(Atc3TraceCat.HIST, "check", "state" to "unknown", "counter" to counter, "at" to readMs)
-            }
+            ?: return unknown(
+                when {
+                    linkBack                                     -> NoBase.LINK_BACK
+                    refilled                                     -> NoBase.REFILL
+                    before == null                               -> NoBase.FIRST
+                    !Atc3DayClock.sameDay(before.readMs, readMs) -> NoBase.MIDNIGHT
+                    readMs < before.readMs                       -> NoBase.TIME_BACK
+                    else                                         -> NoBase.COUNT_RESET
+                },
+                counter, readMs
+            )
         // A bolus that began before the anchor was read and was learned after it: part of it is in
         // the anchor's count and all of it in the interval. The anchor is no good; a new one is read.
         if (atc3HistorySync.bolusStraddles(base.learnedAfterMs, base.readMs)) {
             stateCheck.forget()
-            storeAnchor()
-            trace.event(Atc3TraceCat.HIST, "check", "state" to "unknown", "why" to "bolus_straddles_anchor", "at" to readMs)
-            return Atc3StateCheck.Verdict.Unknown
+            return unknown(NoBase.BOLUS_STRADDLES, counter, readMs)
         }
         val journal = aapsJournal.insulinBetween(base.readMs, readMs, atc3HistorySync.bolusesLearnedAfter(base.learnedAfterMs))
-            ?: return Atc3StateCheck.Verdict.Unknown.also {
+            ?: return unknown(NoBase.NO_PROFILE, counter, readMs).also {
                 aapsLogger.error(LTag.PUMP, "ATC3: no profile is running, the journal cannot be summed")
-                trace.event(Atc3TraceCat.HIST, "check", "state" to "unknown", "why" to "no_profile")
             }
         val verdict = stateCheck.compare(base, readMs, counter, journal.totalUnits, checkTolerance())
         trace.event(
@@ -819,6 +1020,25 @@ class Atc3PumpPlugin @Inject constructor(
             "counter" to counter
         )
         return verdict
+    }
+
+    /** The comparison has nothing to compare against, and says why. */
+    private fun unknown(why: NoBase, counter: Double, readMs: Long): Atc3StateCheck.Verdict {
+        noBase = why
+        trace.event(Atc3TraceCat.HIST, "check", "state" to "unknown", "why" to why.trace, "counter" to counter, "at" to readMs)
+        return Atc3StateCheck.Verdict.Unknown
+    }
+
+    /**
+     * A comparison that had nothing to compare against has taken its anchor. When what left it
+     * with nothing was a beginning, the day's account on the screen is counted from this read as
+     * well -- from the pump's midnight when that is what it was, since the count begins there.
+     */
+    private fun noteBeginning(status: Atc3StatusV1) {
+        val why = noBase?.takeIf { it.begins } ?: return
+        refilled = false
+        dayBase = if (why == NoBase.MIDNIGHT) null else DayBase(atc3Pump.statusReadAtMs, status.deliveredTodayUnits)
+        trace.event(Atc3TraceCat.HIST, "beginning", "why" to why.trace, "at" to atc3Pump.statusReadAtMs, "counter" to status.deliveredTodayUnits)
     }
 
     /**
@@ -845,6 +1065,10 @@ class Atc3PumpPlugin @Inject constructor(
         // The mode has just been switched on: the first period begins at this read.
         val start = state.start ?: return beginBasalPeriod(status, state.closed, "mode_on")
         val closed = state.closed
+        // The count began anew inside the day, see [Atc3LinkWatch.Outcome.COUNT_RESET]: there is
+        // no count to close the period from. Its rows stay as they are.
+        if (Atc3DayClock.sameDay(start.readMs, readMs) && status.deliveredTodayUnits + COUNT_EPSILON < start.counterUnits)
+            return beginBasalPeriod(status, closed, "count_reset")
         // Two things a read can be for: the cycle after a close, and the watershed of the period
         // under way. Most reads are neither, and cost nothing.
         val lookAgain = closed != null && !closed.checked && readMs > closed.endReadMs
@@ -939,16 +1163,25 @@ class Atc3PumpPlugin @Inject constructor(
     /**
      * Set the day's sum of the AAPS journal beside the pump's own count of the day, as of the read
      * just made, for the driver's screen. Information only: nothing is decided by it.
+     *
+     * Counted from the last beginning of the day, see [noteBeginning], and from the pump's midnight
+     * when there was none: across a beginning the two do not belong side by side. A start of AAPS
+     * leaves the journal without what went on before it, and a pump whose count began anew has
+     * forgotten the morning -- on the bench, 2026-10-05, that read as 21 U apart.
      */
     private suspend fun noteDayAccount() {
         val status = atc3Pump.lastStatus ?: return
         val readMs = atc3Pump.statusReadAtMs
-        val journal = aapsJournal.insulinOfDay(Atc3DayClock.dayStartOf(readMs), readMs) ?: return
-        atc3Pump.dayAccount = Atc3Pump.DayAccount(journal.totalUnits, status.deliveredTodayUnits, readMs)
+        val counter = status.deliveredTodayUnits
+        val base = dayBase?.takeIf { Atc3DayClock.sameDay(it.readMs, readMs) && it.readMs <= readMs && counter + COUNT_EPSILON >= it.counterUnits }
+        val journal = aapsJournal.insulinOfDay(base?.readMs ?: Atc3DayClock.dayStartOf(readMs), readMs) ?: return
+        val pumpUnits = counter - (base?.counterUnits ?: 0.0)
+        atc3Pump.dayAccount = Atc3Pump.DayAccount(journal.totalUnits, pumpUnits, readMs, base?.readMs)
         trace.event(
             Atc3TraceCat.HIST, "day",
-            "aaps" to journal.totalUnits, "pump" to status.deliveredTodayUnits, "diff" to status.deliveredTodayUnits - journal.totalUnits,
-            "bolus" to journal.bolusUnits, "tbr" to journal.temporaryBasalUnits, "sched" to journal.scheduledUnits
+            "aaps" to journal.totalUnits, "pump" to pumpUnits, "diff" to pumpUnits - journal.totalUnits,
+            "bolus" to journal.bolusUnits, "tbr" to journal.temporaryBasalUnits, "sched" to journal.scheduledUnits,
+            "since" to (base?.readMs ?: 0L)
         )
         rxBus.send(EventAtc3PumpDataChanged())
     }
@@ -972,15 +1205,6 @@ class Atc3PumpPlugin @Inject constructor(
         val now = dateUtil.now()
         stateCheck.accept(atc3Pump.statusReadAtMs, status.deliveredTodayUnits, now)
         atc3HistorySync.forgetBolusesLearnedUpTo(now)
-        storeAnchor()
-    }
-
-    /** False until the stored anchor has been looked at once in this process. */
-    private var anchorRestored = false
-
-    /** The anchor goes to disk whenever it changes, so that a restart goes on from it. */
-    private fun storeAnchor() {
-        preferences.put(Atc3StringNonKey.CheckAnchor, stateCheck.encode())
     }
 
     /**
@@ -1037,9 +1261,14 @@ class Atc3PumpPlugin @Inject constructor(
         if (status == null) {
             resolution = Resolution.READ_FAILED
         } else if (verdict is Atc3StateCheck.Verdict.Unknown) {
-            anchor(status)
-            lastBalancedAtMs = dateUtil.now()
-            resolution = Resolution.ANCHORED
+            // A stop for want of an answer is closed first, by the journals just read: until the
+            // time without an answer is written, there is nothing to take an anchor on.
+            if (closeLinkStop(status)) {
+                anchor(status)
+                noteBeginning(status)
+                lastBalancedAtMs = dateUtil.now()
+                resolution = Resolution.ANCHORED
+            } else resolution = Resolution.READ_FAILED
         } else {
             // The comparison again, with the rows as the journals have now made them.
             var again = checkState()
@@ -1105,13 +1334,16 @@ class Atc3PumpPlugin @Inject constructor(
                 val runs = stateCheck.unexplained()
                 aapsLogger.warn(
                     LTag.PUMP,
-                    "ATC3: the pump counted ${"%.3f".format(difference)} U more than the AAPS journal accounts for " +
-                        "and the journals do not explain it, $runs time(s) in a row"
+                    "ATC3: the pump counted ${"%.3f".format(abs(difference))} U ${if (difference < 0) "less" else "more"} than the AAPS journal " +
+                        "accounts for and the journals do not explain it, $runs time(s) in a row"
                 )
                 if (runs >= UNEXPLAINED_RUNS_TO_TELL) {
+                    // Said the way it is: more went in than AAPS holds, or less. The one text with
+                    // a signed number read "-2.229 U more" for a pump that had delivered nothing.
                     uiInteraction.addNotification(
                         Notification.PUMP_SYNC_ERROR,
-                        rh.gs(R.string.atc3_journal_unexplained, difference),
+                        if (difference < 0) rh.gs(R.string.atc3_journal_shortfall, -difference)
+                        else rh.gs(R.string.atc3_journal_unexplained, difference),
                         Notification.URGENT
                     )
                     // Said, and let go: the read is accepted, so that the next comparison starts
@@ -1230,6 +1462,14 @@ class Atc3PumpPlugin @Inject constructor(
          * is a couple of hundred cheap checks and nothing else.
          */
         const val BOLUS_HOLD_POLL_MS = 250L
+
+        /** How often the driver looks whether the pump still answers, milliseconds. */
+        const val LINK_WATCH_MS = 60_000L
+
+        const val DAY_MS = 24 * 60 * 60_000L
+
+        /** Under any step of the pump: a count is below another only when it is so by more than this. */
+        const val COUNT_EPSILON = 1e-6
     }
 
     /**
@@ -1257,38 +1497,6 @@ class Atc3PumpPlugin @Inject constructor(
     }
 
     /**
-     * Refuse a pump whose firmware is older than [Atc3Const.MINIMUM_FIRMWARE], and say why.
-     *
-     * Such firmware has no Bluetooth password: the pump takes commands from anything within radio
-     * range, and the driver cannot make it safer. The user is told to have the firmware updated by
-     * the distributor; until then no command goes to the pump and the loop does not run.
-     *
-     * @return true when the pump is refused
-     */
-    private fun refuseOldFirmware(): Boolean {
-        if (!atc3Pump.firmwareTooOld) {
-            if (oldFirmwareTold) {
-                rxBus.send(EventDismissNotification(Notification.PUMP_ERROR))
-                oldFirmwareTold = false
-            }
-            return false
-        }
-        val firmware = atc3Pump.version?.firmwareText ?: "?"
-        aapsLogger.error(LTag.PUMP, "ATC3: firmware $firmware is older than ${Atc3Const.MINIMUM_FIRMWARE.joinToString(".")}, refusing to run this pump")
-        trace.event(Atc3TraceCat.DRV, "firmware_refused", "firmware" to firmware)
-        uiInteraction.addNotification(
-            Notification.PUMP_ERROR,
-            rh.gs(R.string.atc3_firmware_too_old, firmware, Atc3Const.MINIMUM_FIRMWARE.joinToString(".")),
-            Notification.URGENT
-        )
-        oldFirmwareTold = true
-        return true
-    }
-
-    /** True while the user has been told the firmware is too old, so the notice can be taken down. */
-    private var oldFirmwareTold = false
-
-    /**
      * Tell the user when anything within radio range can drive their pump.
      *
      * The Bluetooth password is the only thing between the pump and a stranger: there is no pairing,
@@ -1303,26 +1511,24 @@ class Atc3PumpPlugin @Inject constructor(
      * user dismissed should come back while the pump is still open to the world.
      */
     private fun warnAboutUnprotectedLink() {
+        // Firmware older than the password feature works under 000000 and nothing else: the pump
+        // is run, and warned about for as long as that is so, the way a pump set to 000000 is.
+        val noPasswordFirmware = atc3Pump.version?.isAtLeast(Atc3Const.PASSWORD_FIRMWARE) == false
         when (atc3Manager.linkProtection) {
-            Atc3LinkProtection.UNPROTECTED ->
+            Atc3LinkProtection.UNPROTECTED,
+            Atc3LinkProtection.UNSUPPORTED ->
                 // NORMAL rather than the id's default IMPORTANT: the pump works, and the
                 // user is being told to improve it, not that something has gone wrong.
                 uiInteraction.addNotification(
                     Notification.WRONG_PUMP_PASSWORD,
-                    rh.gs(R.string.atc3_password_not_set),
+                    if (noPasswordFirmware || atc3Manager.linkProtection == Atc3LinkProtection.UNSUPPORTED)
+                        rh.gs(
+                            R.string.atc3_firmware_no_password,
+                            atc3Pump.version?.firmwareText ?: "?", Atc3Const.PASSWORD_FIRMWARE.joinToString(".")
+                        )
+                    else rh.gs(R.string.atc3_password_not_set),
                     Notification.NORMAL
                 )
-
-            Atc3LinkProtection.UNSUPPORTED -> {
-                // Nothing to notify about: there is no action for the user to take today, and a
-                // notification that cannot be acted on is one they learn to swipe away. The status
-                // screen says it instead, for as long as it is true.
-                aapsLogger.debug(
-                    LTag.PUMP,
-                    "ATC3: this pump has no Bluetooth password at all, firmware " +
-                        (atc3Pump.version?.firmwareText ?: "unknown")
-                )
-            }
 
             Atc3LinkProtection.PROTECTED,
             Atc3LinkProtection.UNKNOWN     -> rxBus.send(EventDismissNotification(Notification.WRONG_PUMP_PASSWORD))
@@ -2007,7 +2213,6 @@ class Atc3PumpPlugin @Inject constructor(
      * itself once a later status is back within the limit.
      */
     override fun isLoopInvocationAllowed(value: Constraint<Boolean>): Constraint<Boolean> {
-        if (atc3Pump.firmwareTooOld) value.set(false, rh.gs(R.string.atc3_firmware_loop_blocked), this)
         if (abs(atc3Pump.snapshotAtMs - atc3Pump.statusReadAtMs) >= Atc3Const.CLOCK_MAX_CORRECTION_MS)
             value.set(false, rh.gs(R.string.atc3_clock_loop_blocked), this)
         // Told once and it happened again: the pump says it is delivering and the reservoir has
@@ -2016,6 +2221,12 @@ class Atc3PumpPlugin @Inject constructor(
         // until somebody has looked at the pump.
         if (deliveryStoppedReports >= NO_DELIVERY_REPORTS_BEFORE_STOP)
             value.set(false, rh.gs(R.string.atc3_no_delivery_loop_blocked), this)
+        // No answer for half an hour: nothing is known of the pump, and nothing is decided for it
+        // until it has answered and the time without an answer is written. See [Atc3LinkWatch].
+        if (linkStop() != null) value.set(false, rh.gs(R.string.atc3_link_loop_blocked), this)
+        // No Bluetooth password entered in AAPS: the driver does not work with the pump, and
+        // there is nothing for the loop to decide. See [Atc3Manager.isPasswordEntered].
+        if (!atc3Manager.isPasswordEntered) value.set(false, rh.gs(R.string.atc3_password_loop_blocked), this)
         return value
     }
 
@@ -2127,6 +2338,7 @@ class Atc3PumpPlugin @Inject constructor(
         Atc3Alarm.BLOOD_GLUCOSE_REMINDER -> R.string.atc3_alarm_bg_reminder
         Atc3Alarm.BUTTON_ERROR           -> R.string.atc3_alarm_button_error
         Atc3Alarm.NO_DELIVERY            -> R.string.atc3_alarm_no_delivery
+        Atc3Alarm.MOTOR_ERROR            -> R.string.atc3_alarm_motor_error
         Atc3Alarm.RESERVOIR_EMPTY        -> R.string.atc3_alarm_reservoir_empty
         Atc3Alarm.DAILY_LIMIT            -> R.string.atc3_alarm_daily_limit
     }
@@ -2149,11 +2361,15 @@ class Atc3PumpPlugin @Inject constructor(
         val level = atc3Pump.reservoirUnits
         val wentUp = reservoirSeenUnits >= 0.0 && level > reservoirSeenUnits + Atc3Const.DOSE_SCALE
         reservoirSeenUnits = level
+        // A refill is a beginning: the comparison of this tick starts anew from this read. A
+        // reservoir that went up is a refill whether or not the pump's journal can be read for it.
+        if (wentUp) refilled = true
         val due = wentUp || refillsReadAtMs == 0L || now - refillsReadAtMs >= Atc3Const.ALARM_READ_INTERVAL_MS
         if (!due) return
         val records = atc3Manager.readRefillHistory() ?: return
         refillsReadAtMs = now
-        atc3HistorySync.recordRefills(records)
+        // One the ticks did not see go up -- AAPS was not there -- is in the journal all the same.
+        if (atc3HistorySync.recordRefills(records) > 0) refilled = true
     }
 
     private suspend fun readAlarmsIfDue() {
@@ -2669,11 +2885,6 @@ class Atc3PumpPlugin @Inject constructor(
      * while the pump is locked or the driver would go blind exactly when it is being told no.
      */
     private fun refusedWhileLocked(): PumpEnactResult? {
-        if (atc3Pump.firmwareTooOld) {
-            refuseOldFirmware()
-            return pumpEnactResultProvider.get().success(false).enacted(false)
-                .comment(rh.gs(R.string.atc3_firmware_too_old, atc3Pump.version?.firmwareText ?: "?", Atc3Const.MINIMUM_FIRMWARE.joinToString(".")))
-        }
         if (!atc3Pump.locked) return null
         aapsLogger.debug(LTag.PUMP, "ATC3: the pump is locked, not sending the command")
         trace.event(Atc3TraceCat.DRV, "locked")
