@@ -1,11 +1,14 @@
 package app.aaps.pump.atc3.manager
 
-
 import app.aaps.core.interfaces.ui.UiInteraction
-import app.aaps.pump.atc3.Atc3Pump
-import app.aaps.pump.atc3.ble.Atc3BLE
-import app.aaps.pump.atc3.history.Atc3ClockWatch
+import app.aaps.pump.atc3.clock.Atc3ClockWatch
+import app.aaps.pump.atc3.command.Atc3BolusDelivery
+import app.aaps.pump.atc3.exchange.Atc3Exchange
 import app.aaps.pump.atc3.keys.Atc3StringKey
+import app.aaps.pump.atc3.link.Atc3BLE
+import app.aaps.pump.atc3.link.Atc3BtPassword
+import app.aaps.pump.atc3.link.Atc3Connection
+import app.aaps.pump.atc3.state.Atc3PumpState
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.pump.atc3.trace.Atc3TraceCat
 import app.aaps.shared.tests.TestBaseWithProfile
@@ -14,6 +17,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -37,6 +41,9 @@ class Atc3ManagerDeadLinkTest : TestBaseWithProfile() {
     @Mock lateinit var trace: Atc3Trace
 
     private lateinit var manager: Atc3Manager
+    private lateinit var exchange: Atc3Exchange
+    private lateinit var bolusDelivery: Atc3BolusDelivery
+    private lateinit var connection: Atc3Connection
 
     @BeforeEach
     fun setup() {
@@ -47,10 +54,10 @@ class Atc3ManagerDeadLinkTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         whenever(atc3BLE.write(any())).thenReturn(false)
         whenever(atc3BLE.isConnected).thenReturn(true)
-        manager = Atc3Manager(
-            aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3Pump(),
-            trace, uiInteraction, Atc3ClockWatch(), rh
-        )
+        connection = Atc3Connection(aapsLogger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        exchange = Atc3Exchange(aapsLogger, preferences, atc3BLE, trace, connection)
+        bolusDelivery = Atc3BolusDelivery(aapsLogger, dateUtil, exchange)
+        manager = Atc3Manager(aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3PumpState(), trace, Atc3ClockWatch(), connection, exchange, bolusDelivery)
     }
 
     @Test
@@ -124,7 +131,7 @@ class Atc3ManagerDeadLinkTest : TestBaseWithProfile() {
 
         verify(atc3BLE, never()).write(any())
         assert(result.failure == "the link is down") { result.failure.toString() }
-        assert(manager.cancelTempBasal() == "the link is down")
+        assert(manager.cancelTempBasal().failure == "the link is down")
     }
 
     @Test

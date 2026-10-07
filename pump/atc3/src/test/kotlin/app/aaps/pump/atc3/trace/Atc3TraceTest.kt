@@ -2,6 +2,7 @@ package app.aaps.pump.atc3.trace
 
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
+import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.atc3.keys.Atc3BooleanKey
 import app.aaps.shared.tests.TestBase
 import com.google.common.truth.Truth.assertThat
@@ -14,7 +15,6 @@ import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import app.aaps.core.keys.interfaces.Preferences
 import java.util.Locale
 
 /**

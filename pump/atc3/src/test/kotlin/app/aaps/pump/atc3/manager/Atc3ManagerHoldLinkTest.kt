@@ -1,23 +1,27 @@
 package app.aaps.pump.atc3.manager
 
-
 import app.aaps.core.interfaces.ui.UiInteraction
-import app.aaps.pump.atc3.Atc3Pump
-import app.aaps.pump.atc3.ble.Atc3BLE
-import app.aaps.pump.atc3.history.Atc3ClockWatch
+import app.aaps.pump.atc3.clock.Atc3ClockWatch
+import app.aaps.pump.atc3.command.Atc3BolusDelivery
+import app.aaps.pump.atc3.exchange.Atc3Exchange
 import app.aaps.pump.atc3.keys.Atc3BooleanKey
 import app.aaps.pump.atc3.keys.Atc3StringKey
+import app.aaps.pump.atc3.link.Atc3BLE
+import app.aaps.pump.atc3.link.Atc3BtPassword
+import app.aaps.pump.atc3.link.Atc3Connection
+import app.aaps.pump.atc3.protocol.Atc3Protocol
+import app.aaps.pump.atc3.protocol.Atc3ResponseFrame
+import app.aaps.pump.atc3.protocol.CrcUtil
+import app.aaps.pump.atc3.state.Atc3PumpState
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
-import app.aaps.pump.atc3.Atc3Const
-import app.aaps.pump.atc3.comm.Atc3ResponseFrame
-import app.aaps.pump.atc3.comm.CrcUtil
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argThat
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -40,6 +44,9 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
     @Mock lateinit var uiInteraction: UiInteraction
 
     private lateinit var manager: Atc3Manager
+    private lateinit var exchange: Atc3Exchange
+    private lateinit var bolusDelivery: Atc3BolusDelivery
+    private lateinit var connection: Atc3Connection
 
     @BeforeEach
     fun setup() {
@@ -48,17 +55,18 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         whenever(preferences.get(Atc3BooleanKey.HoldLink)).thenReturn(true)
         whenever(atc3BLE.write(any())).thenReturn(false)
-        manager = Atc3Manager(
-            aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3Pump(),
-            Atc3Trace(aapsLogger, preferences), uiInteraction, Atc3ClockWatch(), rh
-        )
+        val trace = Atc3Trace(aapsLogger, preferences)
+        connection = Atc3Connection(aapsLogger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        exchange = Atc3Exchange(aapsLogger, preferences, atc3BLE, trace, connection)
+        bolusDelivery = Atc3BolusDelivery(aapsLogger, dateUtil, exchange)
+        manager = Atc3Manager(aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3PumpState(), trace, Atc3ClockWatch(), connection, exchange, bolusDelivery)
     }
 
     @Test
     fun `an empty queue does not cost the pump its link`() {
         whenever(atc3BLE.isConnected).thenReturn(true)
 
-        manager.disconnect("Queue empty")
+        connection.disconnect("Queue empty")
 
         verify(atc3BLE, never()).disconnect()
     }
@@ -71,7 +79,7 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
     fun `the watchdog still gets the link dropped`() {
         whenever(atc3BLE.isConnected).thenReturn(true)
 
-        manager.disconnect("watchdog")
+        connection.disconnect("watchdog")
 
         verify(atc3BLE).disconnect()
     }
@@ -80,7 +88,7 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
     fun `a reason the driver does not recognise is taken at face value`() {
         whenever(atc3BLE.isConnected).thenReturn(true)
 
-        manager.disconnect("stopConnecting")
+        connection.disconnect("stopConnecting")
 
         verify(atc3BLE).disconnect()
     }
@@ -90,7 +98,7 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
         whenever(atc3BLE.isConnected).thenReturn(true)
         whenever(preferences.get(Atc3BooleanKey.HoldLink)).thenReturn(false)
 
-        manager.disconnect("Queue empty")
+        connection.disconnect("Queue empty")
 
         verify(atc3BLE).disconnect()
     }
@@ -103,7 +111,7 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
     fun `there is nothing to keep when the link is already down`() {
         whenever(atc3BLE.isConnected).thenReturn(false)
 
-        manager.disconnect("Queue empty")
+        connection.disconnect("Queue empty")
 
         verify(atc3BLE).disconnect()
     }
@@ -114,17 +122,17 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
 
     @Test
     fun `a link the pump has just spoken on is not questioned`() {
-        assertThat(manager.shouldProbeQuietLink(quietForMs = 1_000, connected = true, busy = false)).isFalse()
+        assertThat(connection.shouldProbeQuietLink(quietForMs = 1_000, connected = true, busy = false)).isFalse()
     }
 
     @Test
     fun `a link silent for longer than a missed heartbeat is questioned`() {
-        assertThat(manager.shouldProbeQuietLink(quietForMs = 240_000, connected = true, busy = false)).isTrue()
+        assertThat(connection.shouldProbeQuietLink(quietForMs = 240_000, connected = true, busy = false)).isTrue()
     }
 
     @Test
     fun `a link still short of the threshold is left alone`() {
-        assertThat(manager.shouldProbeQuietLink(quietForMs = 239_999, connected = true, busy = false)).isFalse()
+        assertThat(connection.shouldProbeQuietLink(quietForMs = 239_999, connected = true, busy = false)).isFalse()
     }
 
     /**
@@ -133,12 +141,64 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
      */
     @Test
     fun `a link already carrying an exchange is not questioned`() {
-        assertThat(manager.shouldProbeQuietLink(quietForMs = 600_000, connected = true, busy = true)).isFalse()
+        assertThat(connection.shouldProbeQuietLink(quietForMs = 600_000, connected = true, busy = true)).isFalse()
     }
 
     @Test
     fun `there is nothing to question when there is no link`() {
-        assertThat(manager.shouldProbeQuietLink(quietForMs = 600_000, connected = false, busy = false)).isFalse()
+        assertThat(connection.shouldProbeQuietLink(quietForMs = 600_000, connected = false, busy = false)).isFalse()
+    }
+
+    // The question itself. The watch only notices the silence; the pump is asked on the command
+    // queue's thread, where every other exchange is carried out, and this is what the queue calls.
+
+    @Test
+    fun `a silent pump that does not answer the question loses the link`() {
+        whenever(atc3BLE.isConnected).thenReturn(true)
+        whenever(atc3BLE.quietForMs).thenReturn(300_000L)
+
+        assertThat(manager.probeQuietLink()).isFalse()
+
+        verify(atc3BLE, times(1)).write(any())
+        verify(atc3BLE).disconnect()
+    }
+
+    @Test
+    fun `a silent pump that answers the question keeps the link`() {
+        whenever(atc3BLE.isConnected).thenReturn(true)
+        whenever(atc3BLE.quietForMs).thenReturn(300_000L)
+        whenever(atc3BLE.write(any())).thenAnswer { exchange.onDataReceived(status()); true }
+
+        assertThat(manager.probeQuietLink()).isTrue()
+
+        verify(atc3BLE, never()).disconnect()
+    }
+
+    /**
+     * The queue carries the question in its turn, and whatever went to the pump ahead of it has
+     * already been answered by then. That answer is the proof, and a second read would be for nothing.
+     */
+    @Test
+    fun `a pump heard from since the question was put is not asked`() {
+        whenever(atc3BLE.isConnected).thenReturn(true)
+        whenever(atc3BLE.quietForMs).thenReturn(1_000L)
+
+        assertThat(manager.probeQuietLink()).isTrue()
+
+        verify(atc3BLE, never()).write(any())
+        verify(atc3BLE, never()).disconnect()
+    }
+
+    /** The link went while the question waited in the queue: there is nobody to ask and nothing to drop. */
+    @Test
+    fun `a link already gone is not asked`() {
+        whenever(atc3BLE.isConnected).thenReturn(false)
+        whenever(atc3BLE.quietForMs).thenReturn(300_000L)
+
+        assertThat(manager.probeQuietLink()).isTrue()
+
+        verify(atc3BLE, never()).write(any())
+        verify(atc3BLE, never()).disconnect()
     }
 
     // The period the heartbeat comes on is the pump's setting, left by whichever client set it
@@ -147,19 +207,19 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
     @Test
     fun `the heartbeat period is set once on a link that answers`() {
         whenever(atc3BLE.isConnected).thenReturn(true)
-        whenever(atc3BLE.write(any())).thenAnswer { manager.onDataReceived(ack()); true }
-        manager.onConnected()
+        whenever(atc3BLE.write(any())).thenAnswer { exchange.onDataReceived(ack()); true }
+        connection.onConnected()
 
         manager.ensureHeartbeatPeriod()
         manager.ensureHeartbeatPeriod()
 
-        verify(atc3BLE, times(1)).write(argThat { this[3] == Atc3Const.MODE_CONTROL && this[4] == Atc3Const.ControlOpcode.SET_HEARTBEAT })
+        verify(atc3BLE, times(1)).write(argThat { this[3] == Atc3Protocol.MODE_CONTROL && this[4] == Atc3Protocol.ControlOpcode.SET_HEARTBEAT })
     }
 
     @Test
     fun `a period the pump did not answer is asked for again`() {
         whenever(atc3BLE.isConnected).thenReturn(true)
-        manager.onConnected()
+        connection.onConnected()
 
         manager.ensureHeartbeatPeriod()
         manager.ensureHeartbeatPeriod()
@@ -170,18 +230,24 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
     @Test
     fun `a new link asks for the period again`() {
         whenever(atc3BLE.isConnected).thenReturn(true)
-        whenever(atc3BLE.write(any())).thenAnswer { manager.onDataReceived(ack()); true }
-        manager.onConnected()
+        whenever(atc3BLE.write(any())).thenAnswer { exchange.onDataReceived(ack()); true }
+        connection.onConnected()
         manager.ensureHeartbeatPeriod()
-        manager.onConnected()
+        connection.onConnected()
 
         manager.ensureHeartbeatPeriod()
 
         verify(atc3BLE, times(2)).write(any())
     }
 
+    /** A frame of the shape a status read waits for; too short to decode, which the wait does not ask. */
+    private fun status(): ByteArray {
+        val body = byteArrayOf(Atc3ResponseFrame.MARKER, 0x0A, 0x01, Atc3Protocol.MODE_HISTORY, Atc3Protocol.ReadOpcode.STATUS_V1, 0x00, 0x00, 0x00)
+        return body + CrcUtil.crc16ModbusLeBytes(body)
+    }
+
     private fun ack(): ByteArray {
-        val body = byteArrayOf(Atc3ResponseFrame.MARKER, 0x0A, 0x00, Atc3Const.MODE_CONTROL, Atc3Const.ObjectType.ACK, 0x00, 0x00, 0x00)
+        val body = byteArrayOf(Atc3ResponseFrame.MARKER, 0x0A, 0x00, Atc3Protocol.MODE_CONTROL, Atc3Protocol.ObjectType.ACK, 0x00, 0x00, 0x00)
         return body + CrcUtil.crc16ModbusLeBytes(body)
     }
 
@@ -192,6 +258,6 @@ class Atc3ManagerHoldLinkTest : TestBaseWithProfile() {
      */
     @Test
     fun `a link that has heard nothing yet is not mistaken for a silent one`() {
-        assertThat(manager.shouldProbeQuietLink(quietForMs = -1, connected = true, busy = false)).isFalse()
+        assertThat(connection.shouldProbeQuietLink(quietForMs = -1, connected = true, busy = false)).isFalse()
     }
 }

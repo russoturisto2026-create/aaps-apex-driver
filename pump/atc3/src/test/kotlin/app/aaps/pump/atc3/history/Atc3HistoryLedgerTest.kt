@@ -1,9 +1,9 @@
 package app.aaps.pump.atc3.history
 
 import app.aaps.core.data.model.BS
-import app.aaps.pump.atc3.comm.Atc3BolusFingerprint
-import app.aaps.pump.atc3.comm.Atc3BolusRecord
-import app.aaps.pump.atc3.comm.Atc3StatusV1
+import app.aaps.pump.atc3.protocol.Atc3BolusFingerprint
+import app.aaps.pump.atc3.protocol.Atc3BolusRecord
+import app.aaps.pump.atc3.protocol.Atc3StatusV1
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -196,7 +196,7 @@ class Atc3HistoryLedgerTest {
     @Test
     fun `a settled bolus survives the round trip`() {
         val ledger = Atc3HistoryLedger(serial = "11223344")
-            .withSettled(SettledBolus(startedAtMs = 1788758092627L, requestedUnits = 1.0, units = 0.25, settledAtMs = 1788760013399L))
+            .withSettled(SettledBolus(startedAtMs = 1788758092627L, requestedUnits = 1.0, units = 0.25, settledAtMs = 1788760013399L, pumpId = 1788768059000L))
         val back = Atc3HistoryLedger.decode(ledger.encode(), "11223344")
         val settled = back.settled.single()
         assertEquals(1788758092627L, settled.startedAtMs)
@@ -223,14 +223,27 @@ class Atc3HistoryLedgerTest {
             atc3-ledger-v1
             w|1000000|1|11|11223344|1700000000000
             p|7|1000000|40|0|SMB|0|0|0
-            x|1788758092627|40|10|1788760013399
+            x|1788758092627|40|10|1788760013399|1788768059000
             """.trimIndent()
 
         val back = Atc3HistoryLedger.decode(stored, "11223344")
 
         assertEquals(Atc3StatusV1.wallClockUtcSeconds(1_000_000L), back.pending.single().startUtcSeconds)
         assertEquals(Atc3StatusV1.wallClockUtcSeconds(1788758092627L), back.settled.single().startUtcSeconds)
-        assertEquals(0L, back.settled.single().pumpId)
+        assertEquals(1788768059000L, back.settled.single().pumpId)
+    }
+
+    /** Earlier versions kept a bolus they had given up on, as a line without an id. Nothing waits for one now. */
+    @Test
+    fun `a line of a bolus given up on is passed over`() {
+        val stored = """
+            atc3-ledger-v1
+            w|1000000|1|11|11223344|1700000000000
+            x|1788758092627|40|0|1788760013399
+            x|1788758092627|40|0|1788760013399|0|1788768052
+            """.trimIndent()
+
+        assertTrue(Atc3HistoryLedger.decode(stored, "11223344").settled.isEmpty())
     }
 
     @Test
@@ -273,5 +286,12 @@ class Atc3HistoryLedgerTest {
         val back = Atc3HistoryLedger.decode(ledger.encode(), "11223344").ourTbrs.single()
         assertEquals(0.05, back.carriedUnits!!, 1e-9)
         assertEquals(0.10, back.shapedUnits!!, 1e-9)
+    }
+
+    @Test
+    fun `the serial a stored ledger belongs to is read back, and nothing from an empty or foreign store`() {
+        assertEquals("11223344", Atc3HistoryLedger.serialOf(Atc3HistoryLedger(serial = "11223344").encode()))
+        assertNull(Atc3HistoryLedger.serialOf(""))
+        assertNull(Atc3HistoryLedger.serialOf("some-other-format\nw|0|0|0|11223344"))
     }
 }

@@ -1,42 +1,47 @@
 package app.aaps.pump.atc3.history
 
-import app.aaps.pump.atc3.comm.Atc3FinishedTbr
 import app.aaps.core.data.model.BS
+import app.aaps.core.data.model.TE
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.keys.LongNonKey
-import app.aaps.pump.atc3.Atc3Const
-import app.aaps.pump.atc3.Atc3Pump
-import app.aaps.pump.atc3.comm.Atc3BolusRecord
-import app.aaps.core.data.model.TE
+import app.aaps.pump.atc3.basal.Atc3BasalFact
+import app.aaps.pump.atc3.basal.Atc3BasalPeriod
+import app.aaps.pump.atc3.clock.Atc3ClockWatch
 import app.aaps.pump.atc3.keys.Atc3BooleanKey
 import app.aaps.pump.atc3.keys.Atc3LongNonKey
-import app.aaps.pump.atc3.comm.Atc3RefillRecord
-import app.aaps.pump.atc3.comm.Atc3ResponseFrame
-import app.aaps.pump.atc3.comm.Atc3StatusV1
-import app.aaps.pump.atc3.comm.Atc3TbrRecord
-import app.aaps.pump.atc3.comm.Atc3TbrStatus
 import app.aaps.pump.atc3.keys.Atc3StringNonKey
+import app.aaps.pump.atc3.protocol.Atc3BolusRecord
+import app.aaps.pump.atc3.protocol.Atc3FinishedTbr
+import app.aaps.pump.atc3.protocol.Atc3Protocol
+import app.aaps.pump.atc3.protocol.Atc3RefillRecord
+import app.aaps.pump.atc3.protocol.Atc3ResponseFrame
+import app.aaps.pump.atc3.protocol.Atc3StatusV1
+import app.aaps.pump.atc3.protocol.Atc3TbrRecord
+import app.aaps.pump.atc3.protocol.Atc3TbrStatus
+import app.aaps.pump.atc3.state.Atc3PumpState
+import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.anyInt
 import org.mockito.Mock
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.atLeastOnce
-import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.clearInvocations
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.inOrder
 import org.mockito.kotlin.isNull
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
-import app.aaps.pump.atc3.trace.Atc3Trace
-import kotlinx.coroutines.test.runTest
 import java.util.TimeZone
 
 /**
@@ -51,16 +56,18 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
     @Mock lateinit var pumpSync: PumpSync
     @Mock lateinit var uiInteraction: UiInteraction
 
-    private lateinit var atc3Pump: Atc3Pump
+    private lateinit var pumpState: Atc3PumpState
     private lateinit var clockWatch: Atc3ClockWatch
     private lateinit var sync: Atc3HistorySync
+    private lateinit var events: Atc3HistoryEvents
+    private lateinit var basalFact: Atc3BasalFact
 
     private val serial = "12345678"
 
     @BeforeEach
     fun setup() {
-        atc3Pump = Atc3Pump()
-        atc3Pump.serialNumber = serial
+        pumpState = Atc3PumpState()
+        pumpState.serialNumber = serial
         whenever(rh.gs(anyInt())).thenReturn("mocked resource")
         whenever(preferences.get(Atc3StringNonKey.HistoryLedger)).thenReturn("")
         whenever(preferences.get(LongNonKey.ActivePumpChangeTimestamp)).thenReturn(0L)
@@ -71,10 +78,14 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         whenever(pumpSync.syncBolusWithPumpId(any(), any(), anyOrNull(), any(), any(), any())).thenReturn(true)
         whenever(pumpSync.createOrUpdateTotalDailyDose(any(), any(), any(), any(), anyOrNull(), any(), any())).thenReturn(true)
         clockWatch = Atc3ClockWatch()
+        val trace = Atc3Trace(aapsLogger, preferences)
+        val registration = Atc3PumpRegistration(aapsLogger, rh, pumpSync, pumpState)
         sync = Atc3HistorySync(
-            aapsLogger, rh, uiInteraction, preferences, pumpSync, dateUtil, atc3Pump,
-            clockWatch, Atc3Trace(aapsLogger, preferences)
+            aapsLogger, rh, uiInteraction, preferences, pumpSync, dateUtil, pumpState,
+            clockWatch, trace, registration
         )
+        events = Atc3HistoryEvents(aapsLogger, rh, preferences, pumpSync, dateUtil, pumpState, trace, registration)
+        basalFact = Atc3BasalFact(aapsLogger, pumpSync, dateUtil, pumpState, trace, registration, sync)
     }
 
     /**
@@ -212,6 +223,34 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         verify(pumpSync, never()).syncBolusWithPumpId(any(), any(), anyOrNull(), any(), any(), any())
     }
 
+    /**
+     * Two stores, written one after the other, and a process can die between them. Written in this
+     * order, what survives is a note without a row, which the record turns into a row; the other
+     * way round it would be a row without a note, and the record would come in beside it.
+     */
+    @Test
+    fun `the note of a bolus is written before its row`() = runTest {
+        afterFirstPass()
+        whenever(pumpSync.addBolusWithTempId(any(), any(), any(), any(), any(), any())).thenReturn(true)
+        clearInvocations(preferences)
+
+        sync.registerPending(now - 30_000L, 2.0, BS.Type.SMB)
+
+        val order = inOrder(preferences, pumpSync)
+        order.verify(preferences).put(eq(Atc3StringNonKey.HistoryLedger), any<String>())
+        order.verify(pumpSync).addBolusWithTempId(any(), any(), any(), any(), any(), any())
+    }
+
+    @Test
+    fun `a bolus whose row could not be created leaves no note behind`() = runTest {
+        afterFirstPass()
+        whenever(pumpSync.addBolusWithTempId(any(), any(), any(), any(), any(), any())).thenReturn(false)
+
+        assertThat(sync.registerPending(now - 30_000L, 2.0, BS.Type.SMB)).isEqualTo(0L)
+
+        assertThat(sync.hasPendingBolus()).isFalse()
+    }
+
     @Test
     fun `a bolus whose row the user deleted still reaches AAPS, under the pump's id`() = runTest {
         afterFirstPass()
@@ -243,7 +282,7 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         verify(pumpSync, times(1)).syncBolusWithTempId(
             eq(startedAt), eq(2.0), eq(temporaryId), eq(BS.Type.SMB), eq(expectedId), any(), any()
         )
-        assertThat(atc3Pump.lastBolusTime).isEqualTo(startedAt)
+        assertThat(pumpState.lastBolus?.atMs).isEqualTo(startedAt)
     }
 
     @Test
@@ -283,10 +322,9 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
 
     @Test
     fun `a bolus counts for the check from the moment its amount is learned, wherever its row is dated`() = runTest {
-        // 2026-09-28 09:54: the check anchored at 09:53:58, our 0.5 U started at 09:54:02 and
-        // was closed on its completion frame; its record then sat in the pump's minute 09:53 and
-        // moved the row there, before the anchor -- and out of every time window. The moment the
-        // driver learned the amount is after the anchor whatever the row says.
+        // The check anchored at 09:53:58, our bolus started at 09:54:02 and its record sat in the
+        // pump's minute 09:53, moving the row before the anchor. The moment its amount was learned
+        // is after the anchor whatever the row says.
         afterFirstPass()
         rowsWritable()
         val anchoredAt = now - 40_000L
@@ -316,8 +354,8 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
 
     @Test
     fun `a bolus that began before the anchor and was learned after it spoils the anchor`() = runTest {
-        // 2026-10-03 03:52: AAPS was killed while our 2.0 U ran and anchored again on restart, with
-        // part of the bolus already in the pump's count; the bolus was learned after the anchor.
+        // AAPS restarted while our bolus ran and anchored with part of it already in the pump's
+        // count; the bolus was learned after the anchor.
         afterFirstPass()
         rowsWritable()
         val startedAt = now - 30_000L
@@ -420,7 +458,7 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         // Written as the arithmetic rather than as 2.05: raw 82 times the dose scale is not exactly
         // that in binary floating point, and the comparison is exact.
         verify(pumpSync, times(1)).syncBolusWithPumpId(
-            any(), eq(82 * Atc3Const.DOSE_SCALE), eq(null), any(), any(), any()
+            any(), eq(82 * Atc3Protocol.DOSE_SCALE), eq(null), any(), any(), any()
         )
     }
 
@@ -608,16 +646,6 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         val ours = now - 10 * 60_000L
         ourTwoUnitsAt(ours)
         assertThat(sync.realEndOf(finished(ours - 6 * 3_600_000L, ours - 5 * 3_600_000L, 2.0))).isNull()
-    }
-
-    @Test
-    fun `the loop's last word is what it set, and none once it cancelled`() = runTest {
-        val ours = now - 10 * 60_000L
-        ourTwoUnitsAt(ours)
-        assertThat(sync.loopTbr()?.rawRate).isEqualTo(80)
-        assertThat(sync.loopTbr()?.durationMinutes).isEqualTo(30)
-        sync.loopCancelledTbr(now)
-        assertThat(sync.loopTbr()?.rawRate).isNull()
     }
 
     @Test
@@ -823,13 +851,13 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         whenever(pumpSync.insertTherapyEventIfNewWithTimestamp(any(), any(), anyOrNull(), anyOrNull(), any(), any())).thenReturn(true)
         val old = refill(now - 3 * 24 * 3_600_000L, 9.2)
 
-        sync.recordRefills(listOf(old))
+        events.recordRefills(listOf(old))
         verify(pumpSync, never()).insertTherapyEventIfNewWithTimestamp(any(), any(), anyOrNull(), anyOrNull(), any(), any())
         verify(preferences).put(Atc3LongNonKey.LastRefillSeconds, old.utcSeconds)
 
         whenever(preferences.get(Atc3LongNonKey.LastRefillSeconds)).thenReturn(old.utcSeconds)
         val fresh = refill(now - 60_000L, 27.025)
-        sync.recordRefills(listOf(fresh, old))
+        events.recordRefills(listOf(fresh, old))
         verify(pumpSync, times(1)).insertTherapyEventIfNewWithTimestamp(eq(fresh.timestamp), eq(TE.Type.INSULIN_CHANGE), anyOrNull(), anyOrNull(), any(), any())
     }
 
@@ -941,13 +969,13 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         val runningId = sync.openTbr()!!.pumpId
         val rows = listOf(
             // Begun before the period and reaching into it.
-            Atc3HistorySync.JournalRow(101L, start - 2 * 60_000L, 5 * 60_000L, 0.5, isAbsolute = true, stop = false),
+            Atc3BasalFact.JournalRow(101L, start - 2 * 60_000L, 5 * 60_000L, 0.5, isAbsolute = true, stop = false),
             // A command of the period.
-            Atc3HistorySync.JournalRow(102L, start + 60_000L, 5 * 60_000L, 1.0, isAbsolute = true, stop = false),
-            Atc3HistorySync.JournalRow(runningId, ack, 30 * 60_000L, 2.0, isAbsolute = true, stop = false)
+            Atc3BasalFact.JournalRow(102L, start + 60_000L, 5 * 60_000L, 1.0, isAbsolute = true, stop = false),
+            Atc3BasalFact.JournalRow(runningId, ack, 30 * 60_000L, 2.0, isAbsolute = true, stop = false)
         )
 
-        val closed = sync.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = 30 * 60_000L)
+        val closed = basalFact.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = 30 * 60_000L)
 
         assertThat(closed).isTrue()
         // The command of the period is taken out, and only it.
@@ -977,9 +1005,9 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         val start = now - 40 * 60_000L
         val end = now - 10 * 60_000L
         // Closed two seconds after the read the period ends at, by a command of the same tick.
-        val rows = listOf(Atc3HistorySync.JournalRow(103L, end - 4 * 60_000L, 4 * 60_000L + 2_000L, 1.5, isAbsolute = true, stop = false))
+        val rows = listOf(Atc3BasalFact.JournalRow(103L, end - 4 * 60_000L, 4 * 60_000L + 2_000L, 1.5, isAbsolute = true, stop = false))
 
-        sync.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = null)
+        basalFact.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = null)
 
         verify(pumpSync, never()).invalidateTemporaryBasalWithPumpId(eq(103L), any(), any())
         verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(eq(end), eq(1.5), eq(2_000L), eq(true), isNull(), eq(103L), any(), any())
@@ -1001,9 +1029,9 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
             pumpStart = Atc3TbrStatus(stamp, Atc3StatusV1.wallClockUtcSeconds(stamp), 2.0, null, 60, 0.0)
         )
         val runningId = sync.openTbr()!!.pumpId
-        val rows = listOf(Atc3HistorySync.JournalRow(runningId, ack, 60 * 60_000L, 2.0, isAbsolute = true, stop = false))
+        val rows = listOf(Atc3BasalFact.JournalRow(runningId, ack, 60 * 60_000L, 2.0, isAbsolute = true, stop = false))
 
-        assertThat(sync.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = 60 * 60_000L)).isTrue()
+        assertThat(basalFact.writeBasalFact(start, end, units = 0.5, rows = rows, pumpTbrDurationMs = 60 * 60_000L)).isTrue()
 
         verify(pumpSync, never()).invalidateTemporaryBasalWithPumpId(eq(runningId), any(), any())
         // Its row ends where the period begins.
@@ -1030,7 +1058,7 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         val start = now - 40 * 60_000L
         val end = now - 5 * 60_000L
 
-        sync.writeBasalFact(start, end, units = 0.7, rows = emptyList(), pumpTbrDurationMs = null, write = 1)
+        basalFact.writeBasalFact(start, end, units = 0.7, rows = emptyList(), pumpTbrDurationMs = null, write = 1)
 
         verify(pumpSync, times(1)).invalidateTemporaryBasalWithPumpId(eq(Atc3PumpId.of(start, Atc3PumpId.KIND_BASAL_FACT)), any(), any())
         verify(pumpSync, times(1)).syncTemporaryBasalWithPumpId(
@@ -1046,7 +1074,7 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
         val end = now - 10 * 60_000L
         sync.tbrStartedByAaps(ackAtMs = end - 60_000L, rate = 2.0, durationMinutes = 30)
 
-        assertThat(sync.writeBasalFact(start, end, units = 0.5, rows = emptyList(), pumpTbrDurationMs = 30 * 60_000L)).isFalse()
+        assertThat(basalFact.writeBasalFact(start, end, units = 0.5, rows = emptyList(), pumpTbrDurationMs = 30 * 60_000L)).isFalse()
 
         verify(pumpSync, never()).syncTemporaryBasalWithPumpId(eq(start), any(), any(), any(), anyOrNull(), any(), any(), any())
     }

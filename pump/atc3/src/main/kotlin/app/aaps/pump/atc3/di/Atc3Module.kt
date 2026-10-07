@@ -1,6 +1,6 @@
 package app.aaps.pump.atc3.di
 
-import app.aaps.pump.atc3.Atc3Fragment
+import app.aaps.pump.atc3.ui.Atc3Fragment
 import app.aaps.pump.atc3.ui.Atc3ScanActivity
 import dagger.Module
 import dagger.android.ContributesAndroidInjector

@@ -3,6 +3,9 @@ package app.aaps.pump.atc3
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.core.interfaces.pump.defs.determineCorrectBasalSize
+import app.aaps.pump.atc3.protocol.Atc3Protocol
+import app.aaps.pump.atc3.state.Atc3DoseGrid
+import app.aaps.pump.atc3.state.Atc3PumpState
 import com.google.common.truth.Truth.assertThat
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
@@ -22,11 +25,11 @@ class Atc3ProfileStepsTest {
     private fun slotsOf(rate: Double, percent: Int): DoubleArray {
         val profile = mock<Profile>()
         whenever(profile.getBasalTimeFromMidnight(any())).thenReturn(rate * percent / 100.0)
-        return Atc3Pump.buildBasalSlots(profile) { PumpType.ATC3.determineCorrectBasalSize(it) }
+        return Atc3PumpState.buildBasalSlots(profile) { PumpType.ATC3.determineCorrectBasalSize(it) }
     }
 
     private fun sent(rate: Double, percent: Int): Double = slotsOf(rate, percent).also { slots ->
-        assertThat(slots.size).isEqualTo(Atc3Const.BASAL_SLOTS)
+        assertThat(slots.size).isEqualTo(Atc3Protocol.BASAL_SLOTS)
         assertThat(slots.distinct().size).isEqualTo(1)
     }[0]
 

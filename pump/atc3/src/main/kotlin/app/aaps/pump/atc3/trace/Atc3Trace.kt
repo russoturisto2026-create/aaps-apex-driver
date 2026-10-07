@@ -40,33 +40,16 @@ enum class Atc3TraceCat {
 }
 
 /**
- * A machine readable account of everything the driver and AAPS do, in one line per event.
- *
- * The ordinary log already says a great deal, but it says it in prose written for whoever is
- * reading that one line. Questions about *cadence* — how often the pump is woken, how much of that
- * is useful, how long each connection holds the radio, what order the loop and the driver actually
- * run in — need a stream that a script can add up, and that is what this is.
- *
- * Every line looks the same:
+ * A machine readable account of what the driver and AAPS do, one line per event, for questions of
+ * cadence a script has to add up. Every line has one shape:
  *
  * ```
  * APXT|1|1756100000123|42|r8a3cs3|EXCH|done|what=read_0x12 ok=1 ms=214
  * ```
  *
- * marker, format version, phone clock in milliseconds, a sequence number, the run of the app and
- * the connection this belongs to, category, event, then space separated `key=value` pairs. Pipes and whitespace are
- * stripped from values so the shape never varies, whatever gets logged.
- *
- * Three deliberate choices:
- *
- * - **Its own timestamp.** The log file writes `HH:mm:ss.SSS` and no date, so a session that runs
- *   past midnight cannot be ordered from the log's own stamps. Every line carries epoch
- *   milliseconds of its own.
- * - **Its own sequence number.** The log rolls over at 25 MB and Android's logcat drops lines under
- *   load. A gap in the sequence is how the reader knows it is looking at a hole rather than at a
- *   quiet stretch.
- * - **[System.currentTimeMillis], not `DateUtil`.** This measures the real world, including the
- *   parts of it a test would rather pretend about.
+ * marker, format version, epoch milliseconds, sequence number, run and connection, category, event,
+ * then `key=value` pairs. Its own time, since the log's has no date; its own sequence, so that a gap
+ * shows a hole in the log rather than a quiet stretch; and the real clock, not `DateUtil`.
  */
 @Singleton
 class Atc3Trace @Inject constructor(
@@ -77,15 +60,7 @@ class Atc3Trace @Inject constructor(
     private val seq = AtomicLong(0)
     private val session = AtomicLong(0)
 
-    /**
-     * Which run of the app this line belongs to.
-     *
-     * The sequence and the connection number both start again when the process does, and AAPS is
-     * restarted often enough while a driver is being worked on that a short log routinely holds
-     * several runs. Without this, the third connection of one run and the third of the next are
-     * both `s3`, and a report would add together two connections that never coexisted. Four hex
-     * digits of the start time tell runs apart and carry nothing about the phone or the pump.
-     */
+    /** Which run of the app a line belongs to: sequence and connection number start again with the process. */
     private val run = "r%04x".format(System.currentTimeMillis() / 1000L and 0xFFFF)
 
     private var sessionStartedAt = 0L
@@ -101,18 +76,7 @@ class Atc3Trace @Inject constructor(
     /** False when the user has turned the trace off; nothing is written and nothing is counted. */
     val enabled: Boolean get() = preferences.get(Atc3BooleanKey.Trace)
 
-    /**
-     * How many of each kind of event has been written since the trace was switched on.
-     *
-     * Counted here because every event already passes through one place, so nothing has to be
-     * instrumented twice and nothing can be counted that was not also written down. It follows
-     * that this counts only while the trace is on: the early return above is the switch, and a
-     * tally that kept running with the trace off would describe a period nobody can go and read.
-     *
-     * It is a summary, not a record. The lines themselves are in the log; this exists so that the
-     * shape of a long run - how many connections, how much went unanswered, whether anything was
-     * refused - can be seen without going to fetch them.
-     */
+    /** How many of each event was written while the trace was on: the shape of a long run without fetching the lines. */
     private val tally = ConcurrentHashMap<String, Int>()
 
     /** A snapshot of the tally, safe to read while events are still being written. */
@@ -141,12 +105,7 @@ class Atc3Trace @Inject constructor(
         aapsLogger.info(LTag.PUMP, body.toString())
     }
 
-    /**
-     * Begin a new connection.
-     *
-     * Counting starts from zero here rather than at the moment the link comes up, because the time
-     * spent failing to connect is part of what a connection costs.
-     */
+    /** Begin a connection, counted from the asking: failing to connect is part of what it costs. */
     fun sessionOpen(reason: String) {
         session.incrementAndGet()
         sessionStartedAt = System.currentTimeMillis()
@@ -158,12 +117,7 @@ class Atc3Trace @Inject constructor(
         event(Atc3TraceCat.SESS, "open", "reason" to reason)
     }
 
-    /**
-     * End the connection and report what it cost.
-     *
-     * This is the line the report adds up: a connection that carried no exchanges, or whose
-     * exchanges taught the driver nothing, is one the pump was woken for nothing.
-     */
+    /** End the connection and report what it cost: the line the report adds up. */
     fun sessionClose(reason: String) {
         event(
             Atc3TraceCat.SESS, "close",
@@ -178,15 +132,7 @@ class Atc3Trace @Inject constructor(
         sessionStartedAt = 0L
     }
 
-    /**
-     * An answer arrived that nothing was waiting for.
-     *
-     * On a link with only this driver on it that number is zero. It is not zero when a second
-     * client is talking to the same pump, and that is the only way to know: notifications on a
-     * shared connection reach every app subscribed to them, and a response frame carries no
-     * identity - no request id, no sequence, no serial - so an answer of theirs is indistinguishable
-     * from an answer of ours.
-     */
+    /** An answer nothing was waiting for: zero unless another client talks to the same pump. */
     fun countForeign() {
         if (enabled) foreignFrames.incrementAndGet()
     }

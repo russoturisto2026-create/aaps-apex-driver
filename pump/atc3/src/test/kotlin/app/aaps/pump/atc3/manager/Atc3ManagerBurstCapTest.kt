@@ -1,11 +1,14 @@
 package app.aaps.pump.atc3.manager
 
 import app.aaps.core.interfaces.ui.UiInteraction
-import app.aaps.pump.atc3.Atc3Const
-import app.aaps.pump.atc3.Atc3Pump
-import app.aaps.pump.atc3.ble.Atc3BLE
-import app.aaps.pump.atc3.history.Atc3ClockWatch
+import app.aaps.pump.atc3.clock.Atc3ClockWatch
+import app.aaps.pump.atc3.command.Atc3BolusDelivery
+import app.aaps.pump.atc3.exchange.Atc3Exchange
 import app.aaps.pump.atc3.keys.Atc3StringKey
+import app.aaps.pump.atc3.link.Atc3BLE
+import app.aaps.pump.atc3.link.Atc3Connection
+import app.aaps.pump.atc3.protocol.Atc3Protocol
+import app.aaps.pump.atc3.state.Atc3PumpState
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
@@ -13,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
 
 /**
@@ -20,7 +24,7 @@ import org.mockito.kotlin.whenever
  *
  * Most answers say so themselves: the last record carries a flag. The periodic bolus search does
  * not, once the pump holds more records than the search returns - `35/A3/21/01` stops at
- * [Atc3Const.PERIODIC_BOLUS_FRAMES] frames while the count byte keeps counting every record stored,
+ * [Atc3Protocol.ALIAS_ANSWER_FRAMES] frames while the count byte keeps counting every record stored,
  * so with more records held than that no frame is ever flagged.
  *
  * So this answer is finished by counting frames instead. The boundary matters in both directions
@@ -40,44 +44,48 @@ class Atc3ManagerBurstCapTest : TestBaseWithProfile() {
     @Mock lateinit var uiInteraction: UiInteraction
 
     private lateinit var manager: Atc3Manager
+    private lateinit var exchange: Atc3Exchange
+    private lateinit var bolusDelivery: Atc3BolusDelivery
+    private lateinit var connection: Atc3Connection
 
     @BeforeEach
     fun setup() {
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("12345678")
         whenever(atc3BLE.write(any())).thenReturn(false)
-        manager = Atc3Manager(
-            aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3Pump(),
-            Atc3Trace(aapsLogger, preferences), uiInteraction, Atc3ClockWatch(), rh
-        )
+        val trace = Atc3Trace(aapsLogger, preferences)
+        connection = Atc3Connection(aapsLogger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        exchange = Atc3Exchange(aapsLogger, preferences, atc3BLE, trace, connection)
+        bolusDelivery = Atc3BolusDelivery(aapsLogger, dateUtil, exchange)
+        manager = Atc3Manager(aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3PumpState(), trace, Atc3ClockWatch(), connection, exchange, bolusDelivery)
     }
 
     @Test
     fun `an answer with no fixed size is never finished by counting`() {
         // Cap zero is how every other read is asked for: the full bolus history, the alarms, the
         // profiles. Those flag their last record, and counting must not pre-empt that.
-        assertThat(manager.burstCompleteByCount(frames = 1, cap = 0)).isFalse()
-        assertThat(manager.burstCompleteByCount(frames = 128, cap = 0)).isFalse()
+        assertThat(exchange.burstCompleteByCount(frames = 1, cap = 0)).isFalse()
+        assertThat(exchange.burstCompleteByCount(frames = 128, cap = 0)).isFalse()
     }
 
     @Test
     fun `a burst short of its cap is not finished`() {
-        assertThat(manager.burstCompleteByCount(frames = 9, cap = 10)).isFalse()
+        assertThat(exchange.burstCompleteByCount(frames = 9, cap = 10)).isFalse()
     }
 
     @Test
     fun `a burst that has reached its cap is finished`() {
-        assertThat(manager.burstCompleteByCount(frames = 10, cap = 10)).isTrue()
+        assertThat(exchange.burstCompleteByCount(frames = 10, cap = 10)).isTrue()
     }
 
     /** A frame beyond the cap must not leave the wait hanging for want of an exact match. */
     @Test
     fun `a burst past its cap is still finished`() {
-        assertThat(manager.burstCompleteByCount(frames = 11, cap = 10)).isTrue()
+        assertThat(exchange.burstCompleteByCount(frames = 11, cap = 10)).isTrue()
     }
 
     @Test
     fun `nothing received is not a finished burst`() {
-        assertThat(manager.burstCompleteByCount(frames = 0, cap = 10)).isFalse()
+        assertThat(exchange.burstCompleteByCount(frames = 0, cap = 10)).isFalse()
     }
 
     /**
@@ -86,8 +94,8 @@ class Atc3ManagerBurstCapTest : TestBaseWithProfile() {
      */
     @Test
     fun `the periodic search is capped at the number the protocol documents`() {
-        assertThat(Atc3Const.PERIODIC_BOLUS_FRAMES).isEqualTo(10)
-        assertThat(manager.burstCompleteByCount(frames = 10, cap = Atc3Const.PERIODIC_BOLUS_FRAMES)).isTrue()
-        assertThat(manager.burstCompleteByCount(frames = 9, cap = Atc3Const.PERIODIC_BOLUS_FRAMES)).isFalse()
+        assertThat(Atc3Protocol.ALIAS_ANSWER_FRAMES).isEqualTo(10)
+        assertThat(exchange.burstCompleteByCount(frames = 10, cap = Atc3Protocol.ALIAS_ANSWER_FRAMES)).isTrue()
+        assertThat(exchange.burstCompleteByCount(frames = 9, cap = Atc3Protocol.ALIAS_ANSWER_FRAMES)).isFalse()
     }
 }

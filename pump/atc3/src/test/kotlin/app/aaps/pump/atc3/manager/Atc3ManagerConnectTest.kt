@@ -3,11 +3,15 @@ package app.aaps.pump.atc3.manager
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.pump.atc3.Atc3Const
 import app.aaps.pump.atc3.R
-import app.aaps.pump.atc3.Atc3Pump
-import app.aaps.pump.atc3.ble.Atc3BLE
-import app.aaps.pump.atc3.history.Atc3ClockWatch
+import app.aaps.pump.atc3.clock.Atc3ClockWatch
+import app.aaps.pump.atc3.command.Atc3BolusDelivery
+import app.aaps.pump.atc3.exchange.Atc3Exchange
 import app.aaps.pump.atc3.keys.Atc3BooleanKey
 import app.aaps.pump.atc3.keys.Atc3StringKey
+import app.aaps.pump.atc3.link.Atc3BLE
+import app.aaps.pump.atc3.link.Atc3BtPassword
+import app.aaps.pump.atc3.link.Atc3Connection
+import app.aaps.pump.atc3.state.Atc3PumpState
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
@@ -16,7 +20,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
-import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -36,6 +40,9 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
     @Mock lateinit var uiInteraction: UiInteraction
 
     private lateinit var manager: Atc3Manager
+    private lateinit var exchange: Atc3Exchange
+    private lateinit var bolusDelivery: Atc3BolusDelivery
+    private lateinit var connection: Atc3Connection
 
     @BeforeEach
     fun setup() {
@@ -46,17 +53,18 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3BooleanKey.Trace)).thenReturn(false)
         // No change has been made, so there is no second candidate to fall back to.
         whenever(preferences.get(Atc3StringKey.Atc3BtPasswordAlternate)).thenReturn("")
-        manager = Atc3Manager(
-            aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3Pump(),
-            Atc3Trace(aapsLogger, preferences), uiInteraction, Atc3ClockWatch(), rh
-        )
+        val trace = Atc3Trace(aapsLogger, preferences)
+        connection = Atc3Connection(aapsLogger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        exchange = Atc3Exchange(aapsLogger, preferences, atc3BLE, trace, connection)
+        bolusDelivery = Atc3BolusDelivery(aapsLogger, dateUtil, exchange)
+        manager = Atc3Manager(aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3PumpState(), trace, Atc3ClockWatch(), connection, exchange, bolusDelivery)
     }
 
     @Test
     fun `while the stack is being given a rest, nothing is asked of it`() {
         whenever(atc3BLE.backoffRemainingMs).thenReturn(5_000L)
 
-        assertThat(manager.connect("Connection needed")).isFalse()
+        assertThat(connection.connect("Connection needed")).isFalse()
         verify(atc3BLE, never()).connect(any())
     }
 
@@ -71,7 +79,7 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(atc3BLE.connect(any())).thenReturn(true)
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
 
-        manager.connect("Connection needed")
+        connection.connect("Connection needed")
 
         verify(atc3BLE).setPassword("487613")
     }
@@ -87,11 +95,11 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
 
         repeat(Atc3Const.AUTH_MAX_ATTEMPTS) {
-            assertThat(manager.connect("Connection needed")).isTrue()
-            manager.onAuthenticationRejected()
+            assertThat(connection.connect("Connection needed")).isTrue()
+            connection.onAuthenticationRejected()
         }
 
-        assertThat(manager.connect("Connection needed")).isFalse()
+        assertThat(connection.connect("Connection needed")).isFalse()
         verify(atc3BLE, times(Atc3Const.AUTH_MAX_ATTEMPTS)).connect(any())
     }
 
@@ -106,8 +114,8 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("")
         whenever(rh.gs(R.string.atc3_password_missing)).thenReturn("no password entered")
 
-        assertThat(manager.connect("Connection needed")).isFalse()
-        assertThat(manager.connect("Connection needed")).isFalse()
+        assertThat(connection.connect("Connection needed")).isFalse()
+        assertThat(connection.connect("Connection needed")).isFalse()
 
         verify(atc3BLE, never()).connect(any())
         verify(uiInteraction, times(1)).addNotification(any(), eq("no password entered"), any())
@@ -118,7 +126,7 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
     fun `a link held when the password is taken out is dropped rather than used`() {
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("")
 
-        assertThat(manager.readStatus()).isFalse()
+        assertThat(manager.readStatus()).isNull()
 
         verify(atc3BLE).disconnect()
         verify(atc3BLE, never()).write(any())
@@ -131,14 +139,14 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(atc3BLE.connect(any())).thenReturn(true)
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         repeat(Atc3Const.AUTH_MAX_ATTEMPTS) {
-            manager.connect("Connection needed")
-            manager.onAuthenticationRejected()
+            connection.connect("Connection needed")
+            connection.onAuthenticationRejected()
         }
-        assertThat(manager.connect("Connection needed")).isFalse()
+        assertThat(connection.connect("Connection needed")).isFalse()
 
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("730473")
 
-        assertThat(manager.connect("Connection needed")).isTrue()
+        assertThat(connection.connect("Connection needed")).isTrue()
         verify(atc3BLE).setPassword("730473")
     }
 
@@ -154,8 +162,8 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("123456")
         whenever(preferences.get(Atc3StringKey.Atc3BtPasswordAlternate)).thenReturn("188992")
 
-        manager.connect("Connection needed")
-        manager.onAuthenticationRejected()
+        connection.connect("Connection needed")
+        connection.onAuthenticationRejected()
 
         verify(preferences).put(Atc3StringKey.Atc3BtPassword, "188992")
         verify(preferences).put(Atc3StringKey.Atc3BtPasswordAlternate, "")
@@ -167,7 +175,7 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(atc3BLE.backoffRemainingMs).thenReturn(0L)
         whenever(atc3BLE.connect(any())).thenReturn(true)
 
-        assertThat(manager.connect("Connection needed")).isTrue()
+        assertThat(connection.connect("Connection needed")).isTrue()
         verify(atc3BLE, times(1)).connect(any())
     }
 
@@ -176,7 +184,7 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         // Every request carries the serial, so a connection made without one could not be used.
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("")
 
-        assertThat(manager.connect("Connection needed")).isFalse()
+        assertThat(connection.connect("Connection needed")).isFalse()
         verify(atc3BLE, never()).connect(any())
     }
 }

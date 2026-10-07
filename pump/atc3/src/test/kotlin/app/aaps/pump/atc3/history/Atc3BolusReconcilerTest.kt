@@ -1,8 +1,8 @@
 package app.aaps.pump.atc3.history
 
 import app.aaps.core.data.model.BS
-import app.aaps.pump.atc3.comm.Atc3BolusHistory
-import app.aaps.pump.atc3.comm.Atc3BolusRecord
+import app.aaps.pump.atc3.protocol.Atc3BolusHistory
+import app.aaps.pump.atc3.protocol.Atc3BolusRecord
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -243,8 +243,8 @@ class Atc3BolusReconcilerTest {
 
     @Test
     fun `a bolus of ours is dated by the record's stamp, not by the moment the pump accepted it`() {
-        // The row is the pump's journal moment, once: the stamp of the record the pump keeps the
-        // bolus under, not the second the command was accepted at (user, 2026-09-29).
+        // The row takes the stamp of the record the pump keeps the bolus under, not the second the
+        // command was accepted at.
         val startedAtMs = phoneNow - 50_000L
         val record = recordOf(startedAtMs, 40)
         val outcome = reconcile(listOf(record), ready().withPending(pending(startedAtMs, 1.0)))
@@ -595,8 +595,8 @@ class Atc3BolusReconcilerTest {
         assertEquals(1, outcome.actions.filterIsInstance<Atc3BolusAction.DropPending>().size)
         assertEquals(2.0, outcome.actions.filterIsInstance<Atc3BolusAction.Import>().single().units, 1e-9)
         assertTrue(outcome.ledger.pending.isEmpty())
-        // Nothing is claimed about how much went in: the entry carries zero.
-        assertEquals(0.0, outcome.ledger.settled.single().units, 1e-9)
+        // Nothing is kept of it: the pump was asked and holds no record.
+        assertTrue(outcome.ledger.settled.isEmpty())
     }
 
     @Test

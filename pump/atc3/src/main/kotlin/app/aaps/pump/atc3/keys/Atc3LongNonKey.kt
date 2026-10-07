@@ -9,18 +9,8 @@ enum class Atc3LongNonKey(
 ) : LongNonPreferenceKey {
 
     /**
-     * Pump clock of the newest alarm already written into the AAPS history, whole UTC seconds.
-     *
-     * The pump's alarm history has no identity in it — no id, no sequence number, and an index that
-     * shifts as records age out — so the only thing that says whether a record has been seen before
-     * is its timestamp. Keeping the newest one on disk is what stops the same occlusion being
-     * written again on the next connection, and again after the app restarts.
-     *
-     * Whole seconds through a UTC calendar, like every other history watermark in this driver, so
-     * that a timezone change or daylight saving does not make old records look new.
-     *
-     * Not exportable: it describes one pump's history position, and restoring it onto another phone
-     * or another pump would silently swallow alarms or repeat them.
+     * The newest alarm already written into AAPS, as a UTC-calendar key: an alarm record has no identity
+     * but its time. Not exportable: it is one pump's position in its history.
      */
     LastAlarmSeconds("atc3_last_alarm_seconds", 0L),
 

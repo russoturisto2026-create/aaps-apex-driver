@@ -2,10 +2,14 @@ package app.aaps.pump.atc3.manager
 
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.pump.atc3.Atc3Const
-import app.aaps.pump.atc3.Atc3Pump
-import app.aaps.pump.atc3.ble.Atc3BLE
-import app.aaps.pump.atc3.history.Atc3ClockWatch
+import app.aaps.pump.atc3.clock.Atc3ClockWatch
+import app.aaps.pump.atc3.command.Atc3BolusDelivery
+import app.aaps.pump.atc3.exchange.Atc3Exchange
 import app.aaps.pump.atc3.keys.Atc3StringKey
+import app.aaps.pump.atc3.link.Atc3BLE
+import app.aaps.pump.atc3.link.Atc3BtPassword
+import app.aaps.pump.atc3.link.Atc3Connection
+import app.aaps.pump.atc3.state.Atc3PumpState
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
@@ -14,6 +18,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
 import org.mockito.kotlin.atLeastOnce
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
@@ -37,6 +42,9 @@ class Atc3ManagerSettleTest : TestBaseWithProfile() {
     @Mock lateinit var uiInteraction: UiInteraction
 
     private lateinit var manager: Atc3Manager
+    private lateinit var exchange: Atc3Exchange
+    private lateinit var bolusDelivery: Atc3BolusDelivery
+    private lateinit var connection: Atc3Connection
 
     /** A fixed instant; the base class already has a `now`, and this one must not be it. */
     private val stamp = 1_700_000_000_000L
@@ -49,15 +57,16 @@ class Atc3ManagerSettleTest : TestBaseWithProfile() {
         // A password is entered: without one the driver asks the pump nothing, which is not what these are about.
         whenever(preferences.get(Atc3StringKey.Atc3BtPassword)).thenReturn("487613")
         whenever(atc3BLE.write(any())).thenReturn(false)
-        manager = Atc3Manager(
-            aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3Pump(),
-            Atc3Trace(aapsLogger, preferences), uiInteraction, Atc3ClockWatch(), rh
-        )
+        val trace = Atc3Trace(aapsLogger, preferences)
+        connection = Atc3Connection(aapsLogger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        exchange = Atc3Exchange(aapsLogger, preferences, atc3BLE, trace, connection)
+        bolusDelivery = Atc3BolusDelivery(aapsLogger, dateUtil, exchange)
+        manager = Atc3Manager(aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3PumpState(), trace, Atc3ClockWatch(), connection, exchange, bolusDelivery)
     }
 
     @Test
     fun `a link that has just come up owes the whole window`() {
-        assertThat(Atc3Manager.settleDelayMs(linkUpAtMs = stamp, now = stamp))
+        assertThat(Atc3Exchange.settleDelayMs(linkUpAtMs = stamp, now = stamp))
             .isEqualTo(Atc3Const.FIRST_REQUEST_SETTLE_MS)
     }
 
@@ -65,7 +74,7 @@ class Atc3ManagerSettleTest : TestBaseWithProfile() {
     fun `a link owes only what is left of the window`() {
         val alreadyWaited = 1_200L
 
-        assertThat(Atc3Manager.settleDelayMs(linkUpAtMs = stamp - alreadyWaited, now = stamp))
+        assertThat(Atc3Exchange.settleDelayMs(linkUpAtMs = stamp - alreadyWaited, now = stamp))
             .isEqualTo(Atc3Const.FIRST_REQUEST_SETTLE_MS - alreadyWaited)
     }
 
@@ -75,21 +84,21 @@ class Atc3ManagerSettleTest : TestBaseWithProfile() {
         // window, so the wait costs nothing at all.
         val old = stamp - Atc3Const.FIRST_REQUEST_SETTLE_MS - 1
 
-        assertThat(Atc3Manager.settleDelayMs(linkUpAtMs = old, now = stamp)).isEqualTo(0L)
+        assertThat(Atc3Exchange.settleDelayMs(linkUpAtMs = old, now = stamp)).isEqualTo(0L)
     }
 
     @Test
     fun `the moment the window closes nothing more is owed`() {
         val exactly = stamp - Atc3Const.FIRST_REQUEST_SETTLE_MS
 
-        assertThat(Atc3Manager.settleDelayMs(linkUpAtMs = exactly, now = stamp)).isEqualTo(0L)
+        assertThat(Atc3Exchange.settleDelayMs(linkUpAtMs = exactly, now = stamp)).isEqualTo(0L)
     }
 
     @Test
     fun `no link means no wait rather than a wait of the whole window`() {
         // Zero is "there is no link", not "the link came up at the epoch". Reading it as a time
         // would make every exchange without a connection sit out the window before failing.
-        assertThat(Atc3Manager.settleDelayMs(linkUpAtMs = 0L, now = stamp)).isEqualTo(0L)
+        assertThat(Atc3Exchange.settleDelayMs(linkUpAtMs = 0L, now = stamp)).isEqualTo(0L)
     }
 
     @Test
@@ -98,7 +107,7 @@ class Atc3ManagerSettleTest : TestBaseWithProfile() {
         // would wait however far the clock jumped, in the middle of an exchange.
         val fromTheFuture = stamp + 60_000L
 
-        assertThat(Atc3Manager.settleDelayMs(linkUpAtMs = fromTheFuture, now = stamp))
+        assertThat(Atc3Exchange.settleDelayMs(linkUpAtMs = fromTheFuture, now = stamp))
             .isEqualTo(Atc3Const.FIRST_REQUEST_SETTLE_MS)
     }
 

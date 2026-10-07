@@ -1,6 +1,6 @@
 package app.aaps.pump.atc3.ui
 
-import app.aaps.pump.atc3.comm.Atc3Frame
+import app.aaps.pump.atc3.protocol.Atc3Frame
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue

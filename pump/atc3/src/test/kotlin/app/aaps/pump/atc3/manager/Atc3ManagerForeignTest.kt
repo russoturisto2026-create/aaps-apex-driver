@@ -2,20 +2,25 @@ package app.aaps.pump.atc3.manager
 
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.pump.atc3.Atc3Const
-import app.aaps.pump.atc3.Atc3Pump
-import app.aaps.pump.atc3.ble.Atc3BLE
-import app.aaps.pump.atc3.comm.Atc3ResponseFrame
+import app.aaps.pump.atc3.clock.Atc3ClockWatch
+import app.aaps.pump.atc3.command.Atc3BolusDelivery
+import app.aaps.pump.atc3.exchange.Atc3Exchange
 import app.aaps.pump.atc3.keys.Atc3StringKey
+import app.aaps.pump.atc3.link.Atc3BLE
+import app.aaps.pump.atc3.link.Atc3Connection
+import app.aaps.pump.atc3.protocol.Atc3Protocol
+import app.aaps.pump.atc3.protocol.Atc3ResponseFrame
+import app.aaps.pump.atc3.protocol.CrcUtil
+import app.aaps.pump.atc3.state.Atc3PumpState
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.pump.atc3.trace.Atc3TraceCat
-import app.aaps.pump.atc3.comm.CrcUtil
-import app.aaps.pump.atc3.history.Atc3ClockWatch
 import app.aaps.shared.tests.TestBaseWithProfile
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.any
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
@@ -41,18 +46,24 @@ class Atc3ManagerForeignTest : TestBaseWithProfile() {
     @Mock lateinit var trace: Atc3Trace
 
     private lateinit var manager: Atc3Manager
+    private lateinit var exchange: Atc3Exchange
+    private lateinit var bolusDelivery: Atc3BolusDelivery
+    private lateinit var connection: Atc3Connection
 
     @BeforeEach
     fun setup() {
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("")
         whenever(atc3BLE.write(any())).thenReturn(false)
         whenever(trace.sessionId).thenReturn(1L)
-        manager = Atc3Manager(aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3Pump(), trace, uiInteraction, Atc3ClockWatch(), rh)
+        connection = Atc3Connection(aapsLogger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        exchange = Atc3Exchange(aapsLogger, preferences, atc3BLE, trace, connection)
+        bolusDelivery = Atc3BolusDelivery(aapsLogger, dateUtil, exchange)
+        manager = Atc3Manager(aapsLogger, rxBus, preferences, dateUtil, atc3BLE, Atc3PumpState(), trace, Atc3ClockWatch(), connection, exchange, bolusDelivery)
     }
 
     @Test
     fun `a status answer arriving with nothing armed is somebody else's`() {
-        manager.onDataReceived(reply(Atc3Const.MODE_HISTORY, Atc3Const.ReadOpcode.STATUS_V1))
+        exchange.onDataReceived(reply(Atc3Protocol.MODE_HISTORY, Atc3Protocol.ReadOpcode.STATUS_V1))
 
         verify(trace).countForeign()
     }
@@ -61,14 +72,14 @@ class Atc3ManagerForeignTest : TestBaseWithProfile() {
     fun `an acknowledgement arriving with nothing armed is somebody else's`() {
         // A control ack carries no request identity whatsoever, which is the whole problem: this
         // frame is byte for byte what an ack of ours would be.
-        manager.onDataReceived(reply(Atc3Const.MODE_CONTROL, Atc3Const.ObjectType.ACK))
+        exchange.onDataReceived(reply(Atc3Protocol.MODE_CONTROL, Atc3Protocol.ObjectType.ACK))
 
         verify(trace).countForeign()
     }
 
     @Test
     fun `a refusal arriving with nothing armed is somebody else's`() {
-        manager.onDataReceived(reply(Atc3Const.MODE_CONTROL, Atc3Const.ObjectType.REJECTED))
+        exchange.onDataReceived(reply(Atc3Protocol.MODE_CONTROL, Atc3Protocol.ObjectType.REJECTED))
 
         verify(trace).countForeign()
     }
@@ -77,21 +88,21 @@ class Atc3ManagerForeignTest : TestBaseWithProfile() {
     fun `bolus progress is not evidence of another client`() {
         // The pump sends these unasked while a bolus runs. Counting them would make the number
         // report a second client every time anyone gives a bolus.
-        manager.onDataReceived(reply(Atc3Const.MODE_CONTROL, Atc3Const.ObjectType.BOLUS_PROGRESS))
+        exchange.onDataReceived(reply(Atc3Protocol.MODE_CONTROL, Atc3Protocol.ObjectType.BOLUS_PROGRESS))
 
         verify(trace, never()).countForeign()
     }
 
     @Test
     fun `bolus completion is not evidence of another client`() {
-        manager.onDataReceived(reply(Atc3Const.MODE_CONTROL, Atc3Const.ObjectType.BOLUS_COMPLETED))
+        exchange.onDataReceived(reply(Atc3Protocol.MODE_CONTROL, Atc3Protocol.ObjectType.BOLUS_COMPLETED))
 
         verify(trace, never()).countForeign()
     }
 
     @Test
     fun `the detail is written once for a connection and then only counted`() {
-        repeat(3) { manager.onDataReceived(reply(Atc3Const.MODE_HISTORY, Atc3Const.ReadOpcode.STATUS_V1)) }
+        repeat(3) { exchange.onDataReceived(reply(Atc3Protocol.MODE_HISTORY, Atc3Protocol.ReadOpcode.STATUS_V1)) }
 
         verify(trace, times(3)).countForeign()
         verify(trace).event(eq(Atc3TraceCat.BLE), eq("foreign_answer"), any(), any())
@@ -99,16 +110,16 @@ class Atc3ManagerForeignTest : TestBaseWithProfile() {
 
     @Test
     fun `the next connection says it again`() {
-        manager.onDataReceived(reply(Atc3Const.MODE_HISTORY, Atc3Const.ReadOpcode.STATUS_V1))
+        exchange.onDataReceived(reply(Atc3Protocol.MODE_HISTORY, Atc3Protocol.ReadOpcode.STATUS_V1))
         whenever(trace.sessionId).thenReturn(2L)
-        manager.onDataReceived(reply(Atc3Const.MODE_HISTORY, Atc3Const.ReadOpcode.STATUS_V1))
+        exchange.onDataReceived(reply(Atc3Protocol.MODE_HISTORY, Atc3Protocol.ReadOpcode.STATUS_V1))
 
         verify(trace, times(2)).event(eq(Atc3TraceCat.BLE), eq("foreign_answer"), any(), any())
     }
 
     @Test
     fun `the heartbeat is not evidence of another client`() {
-        manager.onDataReceived(heartbeat(Atc3Const.HEARTBEAT_OBJECT))
+        exchange.onDataReceived(heartbeat(Atc3Const.HEARTBEAT_OBJECT))
         verify(atc3BLE).noteHeartbeat()
         verify(trace, never()).countForeign()
     }
@@ -119,14 +130,14 @@ class Atc3ManagerForeignTest : TestBaseWithProfile() {
      */
     @Test
     fun `a heartbeat on somebody else's period is still the heartbeat`() {
-        manager.onDataReceived(heartbeat(0x02))
+        exchange.onDataReceived(heartbeat(0x02))
         verify(atc3BLE).noteHeartbeat()
         verify(trace, never()).countForeign()
     }
 
     /** The heartbeat frame: eight bytes, declared as six, the way frame id 0xA5 declares itself. */
     private fun heartbeat(period: Byte): ByteArray {
-        val body = byteArrayOf(Atc3ResponseFrame.MARKER, 0x06, 0x00, Atc3Const.MODE_HEARTBEAT, period, 0x00)
+        val body = byteArrayOf(Atc3ResponseFrame.MARKER, 0x06, 0x00, Atc3Protocol.MODE_HEARTBEAT, period, 0x00)
         return body + CrcUtil.crc16ModbusLeBytes(body)
     }
 

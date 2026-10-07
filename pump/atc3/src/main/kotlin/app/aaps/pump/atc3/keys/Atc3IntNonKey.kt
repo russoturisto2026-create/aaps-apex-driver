@@ -1,7 +1,7 @@
 package app.aaps.pump.atc3.keys
 
 import app.aaps.core.keys.interfaces.IntNonPreferenceKey
-import app.aaps.pump.atc3.Atc3Const
+import app.aaps.pump.atc3.protocol.Atc3Settings
 
 enum class Atc3IntNonKey(
     override val key: String,
@@ -10,13 +10,8 @@ enum class Atc3IntNonKey(
 ) : IntNonPreferenceKey {
 
     /**
-     * The alarm signal duration the driver last wrote, see [app.aaps.pump.atc3.comm.Atc3Settings].
-     *
-     * This is the one settings field Status V1 does not mirror, and `35/A1/32` replaces the whole
-     * block, so every settings write has to carry a value for it. Remembering the last one is the
-     * only way to stop a change to some other setting from also moving this one. Until the driver
-     * has written it once the pump's own value is unknown, and the first settings write sets the
-     * normal duration whatever the pump was on.
+     * The alarm signal duration last written, see [app.aaps.pump.atc3.protocol.Atc3Settings]: the pump
+     * does not report it, and every settings write carries it.
      */
-    AlarmDuration("atc3_alarm_duration", defaultValue = Atc3Const.Settings.ALARM_DURATION_NORMAL),
+    AlarmDuration("atc3_alarm_duration", defaultValue = Atc3Settings.ALARM_DURATION_NORMAL),
 }

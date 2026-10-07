@@ -1,67 +1,110 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     tools:context="app.aaps.pump.atc3.ui.Atc3ScanActivity">
 
-    <TextView
-        android:id="@+id/atc3_scanner_hint"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="12dp"
-        android:text="@string/atc3_scan_hint" />
+        android:orientation="vertical"
+        android:paddingBottom="12dp">
 
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:layout_marginBottom="8dp"
-        android:hint="@string/atc3_halo_serial_dialog_hint">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/atc3_scanner_serial"
+        <TextView
+            android:id="@+id/atc3_scanner_hint"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:digits="0123456789"
-            android:inputType="number"
-            android:maxLength="8" />
+            android:padding="12dp"
+            android:text="@string/atc3_scan_hint" />
 
-    </com.google.android.material.textfield.TextInputLayout>
-
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:layout_marginBottom="8dp"
-        android:hint="@string/atc3_scanner_password_hint">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/atc3_scanner_password"
+        <!-- Step 1: the serial, and the search for the pump that advertises it. -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:digits="0123456789"
-            android:inputType="number"
-            android:maxLength="6" />
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="8dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-    </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/atc3_scanner_serial_hint">
 
-    <ListView
-        android:id="@+id/atc3_scanner_listview"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/atc3_scanner_serial"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:digits="0123456789"
+                    android:inputType="number"
+                    android:maxLength="8" />
 
-    <TextView
-        android:id="@+id/atc3_scanner_no_device"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:gravity="center"
-        android:padding="12dp"
-        android:text="@string/atc3_scan_enter_serial"
-        android:textColor="#FF7F8288" />
+            </com.google.android.material.textfield.TextInputLayout>
 
-</LinearLayout>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/atc3_scanner_find"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:enabled="false"
+                android:text="@string/atc3_scanner_find" />
+
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/atc3_scanner_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="8dp"
+            android:text="@string/atc3_scan_enter_serial"
+            android:textColor="#FF7F8288" />
+
+        <!-- Step 2: the password, shown once the pump has been found on the air. -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/atc3_scanner_password_layout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:layout_marginBottom="8dp"
+            android:hint="@string/atc3_scanner_password_hint"
+            android:visibility="gone">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/atc3_scanner_password"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:digits="0123456789"
+                android:inputType="number"
+                android:maxLength="6" />
+
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <!-- Step 3: connect; or, for a pump already connected, disconnect. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/atc3_scanner_connect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:enabled="false"
+            android:text="@string/atc3_scanner_connect"
+            android:visibility="gone" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/atc3_scanner_disconnect"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:text="@string/atc3_scanner_disconnect"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+</ScrollView>

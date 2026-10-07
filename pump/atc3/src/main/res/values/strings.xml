@@ -4,11 +4,10 @@
     <string name="atc3_name_short">Apex</string>
     <string name="atc3_pump_description">Pump integration for Apex</string>
 
-    <string name="atc3_scan_title">Select Apex pump</string>
-    <string name="atc3_scan_hint">Enter the eight digit serial number printed on the pump. Only that pump is listed: no other pump nearby can be picked by mistake.</string>
+    <string name="atc3_scan_title">Apex pump connection</string>
+    <string name="atc3_scan_hint">1. Enter the eight digit serial number printed on the pump and press Find. Only the pump with this serial is looked for: no other pump nearby can be connected by mistake.\n2. Once the pump is found, enter its Bluetooth password, the six digits shown as B/P on the pump status screen.\n3. Press Connect. The serial and the password are kept only if the pump answers.</string>
     <string name="atc3_scan_enter_serial">Enter the serial number of your pump</string>
     <string name="atc3_scan_looking_for">Looking for %1$s. Bring the pump close and wake its screen so it advertises.</string>
-    <string name="atc3_scan_selected">Selected %1$s</string>
 
     <string name="atc3_not_supported_extended_bolus">Apex driver does not support extended boluses</string>
     <string name="atc3_not_supported_percent_tbr">Apex driver does not support percentage temp basals</string>
@@ -19,7 +18,6 @@
     <string name="atc3_command_data_changed">The pump records changed what AAPS knew; the loop will decide again on the corrected data</string>
     <string name="atc3_journal_shortfall">The pump delivered %1$.3f U less than the AAPS journal accounts for, and its journals do not explain it. Check that the pump is delivering.</string>
     <string name="atc3_journal_unexplained">The pump counted %1$.3f U more than the AAPS journal accounts for, and its journals do not explain it. Check the pump.</string>
-    <string name="atc3_bolus_unconfirmed_dropped">The pump recorded a later bolus but never the bolus of %1$.2f U. It has been zeroed in AAPS. Check the pump to see whether the insulin was delivered.</string>
     <string name="atc3_no_delivery_loop_blocked">The pump is not delivering the insulin it reports. The loop is stopped until the pump has been checked.</string>
     <string name="atc3_link_silent">Apex: the pump has not answered for %1$d min. Check the pump and the phone\'s Bluetooth.</string>
     <string name="atc3_link_stopped">Apex: the pump has not answered for %1$d min. AAPS has stopped: the loop does not run and no basal is counted until the pump answers.</string>
@@ -50,7 +48,7 @@
     <string name="atc3_alarm_daily_limit">daily dose limit reached, the pump delivers nothing more today</string>
     <string name="atc3_alarm_reservoir_empty">reservoir empty</string>
     <string name="atc3_alarm_unknown">alarm code %1$d</string>
-    <string name="atc3_smb_tbr_touched">Microbolus refused: the temporary basal was changed on the pump after the loop calculated. It has been set back, and the loop will recalculate.</string>
+    <string name="atc3_smb_data_changed">Microbolus refused: the pump\'s count of delivered insulin does not agree with what AAPS holds, or its records could not be read. The loop will recalculate.</string>
     <string name="atc3_smb_stale_iob">Microbolus refused: insulin was delivered on the pump after the loop calculated. The loop will recalculate with it included.</string>
     <string name="atc3_extended_imported">Extended bolus of %1$.2f U recorded as a normal bolus given at its start</string>
     <string name="atc3_history_start">AAPS starts recording this Apex pump now. Anything it delivered earlier is not imported.</string>
@@ -63,73 +61,70 @@
 
 
     <!-- Pump screen. -->
-    <string name="atc3_halo_title">#WeAreNotWaiting</string>
-    <string name="atc3_halo_serial_dialog_title">Pump serial number</string>
-    <string name="atc3_halo_serial_dialog_hint">8 digits</string>
-    <string name="atc3_halo_serial_invalid">Serial number must be 8 digits</string>
-    <string name="atc3_halo_select_pump">Select pump</string>
-    <string name="atc3_halo_change_pump">Change pump</string>
-    <string name="atc3_halo_no_serial">Not selected</string>
-    <string name="atc3_halo_units_short">U</string>
-    <string name="atc3_halo_reservoir_eyebrow">REMAINING</string>
-    <string name="atc3_halo_reservoir_of">of %1$d U</string>
-    <string name="atc3_halo_battery_label">Battery</string>
-    <string name="atc3_halo_percent_short">%</string>
-    <string name="atc3_halo_battery_volts">%1$.2f V</string>
-    <string name="atc3_halo_connection_label">Link</string>
-    <string name="atc3_halo_connection_connected">Connected</string>
-    <string name="atc3_halo_connection_connecting">Connecting…</string>
-    <string name="atc3_halo_connection_waiting">Waiting</string>
-    <string name="atc3_halo_days_label">Insulin left</string>
-    <string name="atc3_halo_days_value">≈ %1$s days</string>
-    <string name="atc3_halo_days_caption">at %1$d-day average use</string>
-    <string name="atc3_halo_days_no_data">not enough history yet</string>
+    <string name="atc3_title">#WeAreNotWaiting</string>
+    <string name="atc3_select_pump">Select pump</string>
+    <string name="atc3_change_pump">Change pump</string>
+    <string name="atc3_no_serial">Not selected</string>
+    <string name="atc3_units_short">U</string>
+    <string name="atc3_reservoir_eyebrow">REMAINING</string>
+    <string name="atc3_reservoir_of">of %1$d U</string>
+    <string name="atc3_battery_label">Battery</string>
+    <string name="atc3_percent_short">%</string>
+    <string name="atc3_battery_volts">%1$.2f V</string>
+    <string name="atc3_connection_label">Link</string>
+    <string name="atc3_connection_connected">Connected</string>
+    <string name="atc3_connection_connecting">Connecting…</string>
+    <string name="atc3_connection_waiting">Waiting</string>
+    <string name="atc3_days_label">Insulin left</string>
+    <string name="atc3_days_value">≈ %1$s days</string>
+    <string name="atc3_days_caption">at %1$d-day average use</string>
+    <string name="atc3_days_no_data">not enough history yet</string>
 
     <!-- How long ago the pump was last heard from. -->
-    <string name="atc3_halo_just_now">just now</string>
-    <plurals name="atc3_halo_minutes_ago">
+    <string name="atc3_just_now">just now</string>
+    <plurals name="atc3_minutes_ago">
         <item quantity="one">%d minute ago</item>
         <item quantity="other">%d minutes ago</item>
     </plurals>
-    <plurals name="atc3_halo_hours_ago">
+    <plurals name="atc3_hours_ago">
         <item quantity="one">%d hour ago</item>
         <item quantity="other">%d hours ago</item>
     </plurals>
-    <plurals name="atc3_halo_days_ago">
+    <plurals name="atc3_days_ago">
         <item quantity="one">%d day ago</item>
         <item quantity="other">%d days ago</item>
     </plurals>
-    <string name="atc3_halo_state_running">Running</string>
-    <string name="atc3_halo_state_suspended">Paused</string>
-    <string name="atc3_halo_state_locked">Locked</string>
-    <string name="atc3_halo_state_unknown">Not read yet</string>
-    <string name="atc3_halo_never_connected">Never connected</string>
+    <string name="atc3_state_running">Running</string>
+    <string name="atc3_state_suspended">Paused</string>
+    <string name="atc3_state_locked">Locked</string>
+    <string name="atc3_state_unknown">Not read yet</string>
+    <string name="atc3_never_connected">Never connected</string>
 
-    <string name="atc3_halo_settings_eyebrow">SETTINGS</string>
-    <string name="atc3_halo_settings_heading">Limits and link</string>
-    <string name="atc3_halo_placeholder_value">—</string>
+    <string name="atc3_settings_eyebrow">SETTINGS</string>
+    <string name="atc3_settings_heading">Limits and link</string>
+    <string name="atc3_placeholder_value">—</string>
 
     <!-- Settings screens. Every row here is one field of the pump's own settings block. -->
-    <string name="atc3_halo_settings_need_read">Waiting for the pump to report its settings. Pull down on the status screen to read it now.</string>
-    <string name="atc3_halo_settings_no_bluetooth">Bluetooth is off on the phone, so the pump cannot be reached.</string>
-    <string name="atc3_halo_settings_no_pump">No pump selected yet. Pick one on the status screen.</string>
-    <string name="atc3_halo_settings_sending">Sending to the pump…</string>
-    <string name="atc3_halo_settings_failed">The pump did not take the change: %1$s</string>
-    <string name="atc3_halo_save">Save</string>
-    <string name="atc3_halo_discard">Discard</string>
-    <plurals name="atc3_halo_unsaved">
+    <string name="atc3_settings_need_read">Waiting for the pump to report its settings. Pull down on the status screen to read it now.</string>
+    <string name="atc3_settings_no_bluetooth">Bluetooth is off on the phone, so the pump cannot be reached.</string>
+    <string name="atc3_settings_no_pump">No pump selected yet. Pick one on the status screen.</string>
+    <string name="atc3_settings_sending">Sending to the pump…</string>
+    <string name="atc3_settings_failed">The pump did not take the change: %1$s</string>
+    <string name="atc3_save">Save</string>
+    <string name="atc3_discard">Discard</string>
+    <plurals name="atc3_unsaved">
         <item quantity="one">%d setting not sent to the pump yet</item>
         <item quantity="other">%d settings not sent to the pump yet</item>
     </plurals>
 
-    <string name="atc3_halo_max_bolus_label">Maximum bolus</string>
-    <string name="atc3_halo_max_bolus_caption">per single delivery</string>
-    <string name="atc3_halo_max_basal_label">Maximum basal</string>
-    <string name="atc3_halo_max_basal_caption">upper rate limit</string>
-    <string name="atc3_halo_bolus_speed_label">Bolus speed</string>
-    <string name="atc3_halo_bolus_speed_caption">how fast insulin leaves the pump</string>
-    <string name="atc3_halo_bolus_speed_normal">Normal</string>
-    <string name="atc3_halo_bolus_speed_low">Low</string>
+    <string name="atc3_max_bolus_label">Maximum bolus</string>
+    <string name="atc3_max_bolus_caption">per single delivery</string>
+    <string name="atc3_max_basal_label">Maximum basal</string>
+    <string name="atc3_max_basal_caption">upper rate limit</string>
+    <string name="atc3_bolus_speed_label">Bolus speed</string>
+    <string name="atc3_bolus_speed_caption">how fast insulin leaves the pump</string>
+    <string name="atc3_bolus_speed_normal">Normal</string>
+    <string name="atc3_bolus_speed_low">Low</string>
 
 
 
@@ -141,37 +136,53 @@
     <string name="atc3_hold_link_title">Keep the pump connection open</string>
     <string name="atc3_hold_link_summary">Stay connected between exchanges instead of reconnecting every few minutes. The pump sends a signal every three minutes, and the connection is dropped and rebuilt if that stops arriving. Turn this off only if the connection proves unreliable on this phone.</string>
     <string name="atc3_password_given_up">The pump refused the Bluetooth password ten times, so the driver has stopped trying. Read the current B/P from the pump status screen and enter it in the Apex settings.</string>
-    <string name="atc3_password_missing">No Bluetooth password is entered in AAPS, so the driver is not working with the pump. Read the current B/P from the pump status screen and enter it in the Apex settings; for a pump with its password switched off, enter 000000.</string>
+    <string name="atc3_password_missing">No Bluetooth password is entered in AAPS, so the driver is not working with the pump. Connect the pump on the Apex pump connection screen: its serial, then the current B/P from the pump status screen; for a pump with its password switched off, enter 000000.</string>
     <string name="atc3_password_loop_blocked">No Bluetooth password is entered in AAPS. The loop is stopped until one is.</string>
     <string name="atc3_password_rejected">The pump refused the Bluetooth password. Read the current B/P from the pump status screen and enter it again.</string>
     <string name="atc3_password_not_set">The pump has no Bluetooth password, so anything within radio range can control it. Set one from the Apex device screen and check the B/P line on the pump.</string>
-    <string name="atc3_halo_link_unprotected">No Bluetooth password: anything within radio range can control this pump. Set one below.</string>
-    <string name="atc3_halo_link_unsupported">Unprotected link: the firmware on this pump (%1$s) has no Bluetooth password. Update it to %2$s or newer to protect the connection.</string>
-    <string name="atc3_halo_firmware_unknown">unknown</string>
+    <string name="atc3_link_unprotected">No Bluetooth password: anything within radio range can control this pump. Set one below.</string>
+    <string name="atc3_link_unsupported">Unprotected link: the firmware on this pump (%1$s) has no Bluetooth password. Update it to %2$s or newer to protect the connection.</string>
+    <string name="atc3_firmware_unknown">unknown</string>
 
-    <string name="atc3_halo_password_label">Bluetooth password</string>
-    <string name="atc3_halo_password_caption">Tap to set a new one on the pump</string>
-    <string name="atc3_halo_password_none">not set</string>
-    <string name="atc3_halo_password_dialog_title">Bluetooth password</string>
-    <string name="atc3_halo_password_dialog_hint">6 digits</string>
-    <string name="atc3_halo_password_invalid">The password must be 6 digits</string>
-    <string name="atc3_halo_password_out_of_range">The pump can only be given a password of %1$s or less</string>
-    <string name="atc3_halo_password_write">Set on pump</string>
-    <string name="atc3_halo_password_written">The pump now uses %1$s. Check the B/P line on its screen.</string>
-    <string name="atc3_halo_password_write_failed">The pump did not take the new password: %1$s</string>
+    <string name="atc3_password_label">Bluetooth password</string>
+    <string name="atc3_password_caption">Tap to set a new one on the pump</string>
+    <string name="atc3_password_none">not set</string>
+    <string name="atc3_password_dialog_title">Bluetooth password</string>
+    <string name="atc3_password_dialog_hint">6 digits</string>
+    <string name="atc3_password_invalid">The password must be 6 digits</string>
+    <string name="atc3_password_out_of_range">The pump can only be given a password of %1$s or less</string>
+    <string name="atc3_password_write">Set on pump</string>
+    <string name="atc3_password_written">The pump now uses %1$s. Check the B/P line on its screen.</string>
+    <string name="atc3_password_write_failed">The pump did not take the new password: %1$s</string>
 
-    <string name="atc3_halo_password_random">Random</string>
+    <string name="atc3_password_random">Random</string>
 
-    <string name="atc3_halo_exact_basal_caption">Every passed half hour as one record at what the pump counted, in place of the commands</string>
-    <string name="atc3_halo_hold_link_caption">Stay connected between exchanges instead of reconnecting each time</string>
-    <string name="atc3_halo_driver_version_label">Driver version</string>
-    <string name="atc3_halo_day_account_label">Delivered today: AAPS and the pump</string>
-    <string name="atc3_halo_day_account_value">AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
-    <string name="atc3_halo_day_account_value_since">since %4$s · AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
-    <string name="atc3_halo_day_account_none">not compared yet</string>
-    <string name="atc3_halo_trace_label">Driver trace</string>
-    <string name="atc3_halo_trace_caption">Machine readable log for bench captures, off unless one is being taken</string>
+    <string name="atc3_exact_basal_caption">Every passed half hour as one record at what the pump counted, in place of the commands</string>
+    <string name="atc3_hold_link_caption">Stay connected between exchanges instead of reconnecting each time</string>
+    <string name="atc3_driver_version_label">Driver version</string>
+    <string name="atc3_day_account_label">Delivered today: AAPS and the pump</string>
+    <string name="atc3_day_account_value">AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
+    <string name="atc3_day_account_value_since">since %4$s · AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
+    <string name="atc3_day_account_none">not compared yet</string>
+    <string name="atc3_trace_label">Driver trace</string>
+    <string name="atc3_trace_caption">Machine readable log for bench captures, off unless one is being taken</string>
 
-    <string name="atc3_halo_password_change_hint">Give the pump a new Bluetooth password. To enter the one it already uses, open the pump selection screen instead.</string>
-    <string name="atc3_scanner_password_hint">Bluetooth password (B/P on the pump), 6 digits</string>
+    <string name="atc3_password_change_hint">Give the pump a new Bluetooth password. To enter the one it already uses, open the pump selection screen instead.</string>
+    <string name="atc3_scanner_password_hint">2. Bluetooth password (B/P on the pump screen), 6 digits</string>
+    <string name="atc3_scanner_serial_hint">1. Serial number (on the pump case), 8 digits</string>
+    <string name="atc3_scanner_connect">Connect</string>
+    <string name="atc3_scanner_disconnect">Disconnect</string>
+    <string name="atc3_scanner_connecting">Connecting to %1$s…</string>
+    <string name="atc3_scanner_connected">Connected to %1$s. The serial and the password are saved.</string>
+    <string name="atc3_scanner_paired">Pump %1$s is connected. To connect another pump, disconnect this one first.</string>
+    <string name="atc3_scanner_refused">The pump refused the password. Check B/P on the pump status screen. Nothing was saved.</string>
+    <string name="atc3_scanner_failed">The pump did not answer: %1$s. Nothing was saved.</string>
+    <string name="atc3_scanner_not_found">Pump %1$s was not found nearby. Bring it close, wake its screen and press Find again.</string>
+    <string name="atc3_scanner_disconnected">Pump disconnected, its serial and password are removed</string>
+    <string name="atc3_scanner_bolus_running">A bolus is under way. Disconnect the pump once it has finished.</string>
+    <string name="atc3_scanner_find">Find</string>
+    <string name="atc3_scanner_searching">Searching…</string>
+    <string name="atc3_scanner_press_find">Press Find to look for the pump</string>
+    <string name="atc3_scanner_found">Found %1$s. Enter its password and press Connect.</string>
+    <string name="atc3_scanner_no_bluetooth">Bluetooth is off or not permitted, the pump cannot be looked for</string>
 </resources>

@@ -13,16 +13,9 @@ import app.aaps.pump.atc3.R
 import com.google.android.material.textfield.TextInputLayout
 
 /**
- * The AAPS number picker, styled to match the rest of the pump screen.
- *
- * Here a stepper is two round outlined buttons with the value in a pill between them, the same
- * capsule shapes as the rest of the screen. The stock picker draws two square Material buttons
- * overlapping the ends of an outlined rectangle.
- *
- * Only the appearance is changed. Everything the picker does, the long press acceleration, the
- * typed entry, the range and the formatter, is the AAPS widget's own and is left alone, which is
- * why this dresses the inflated views rather than replacing the layout: the layout is bound
- * through `NumberPickerViewAdapter`, which only accepts the two layouts core ships.
+ * The AAPS number picker styled like the rest of the pump screen: round stepper buttons and the
+ * value in a pill. Only the look changes; the views are dressed after inflation, since
+ * `NumberPickerViewAdapter` accepts only core's two layouts.
  */
 class Atc3NumberPicker @JvmOverloads constructor(
     context: Context,
@@ -43,13 +36,7 @@ class Atc3NumberPicker @JvmOverloads constructor(
         pillValue(binding.textInputLayout)
     }
 
-    /**
-     * A round button rather than a square one.
-     *
-     * The size has to be set in both directions: the stock layout gives the button the full height
-     * and a fixed width, which an oval background would draw as an ellipse. The negative margins go
-     * with it, they exist only to tuck a square button into the corners of the value box.
-     */
+    /** A round button: sized both ways, without the margins that tucked a square one into the box. */
     private fun roundStepper(button: ImageButton) {
         (button.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
             params.width = dp(STEPPER_DP)
@@ -59,19 +46,14 @@ class Atc3NumberPicker @JvmOverloads constructor(
             params.marginEnd = 0
             button.layoutParams = params
         }
-        button.background = ContextCompat.getDrawable(context, R.drawable.atc3_halo_stepper)
-        button.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(context, R.color.atc3_halo_ink))
+        button.background = ContextCompat.getDrawable(context, R.drawable.atc3_stepper)
+        button.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(context, R.color.atc3_ink))
         button.scaleType = ImageView.ScaleType.CENTER_INSIDE
         val padding = dp(STEPPER_PADDING_DP)
         button.setPadding(padding, padding, padding, padding)
     }
 
-    /**
-     * The value in a pill of its own, inset far enough to leave the two buttons standing free.
-     *
-     * The outlined box the stock picker uses is stripped rather than restyled: what is wanted is
-     * the same pill the select rows on these screens use.
-     */
+    /** The value in a pill of its own, leaving the buttons free. */
     private fun pillValue(layout: TextInputLayout) {
         (layout.layoutParams as? ViewGroup.MarginLayoutParams)?.let { params ->
             params.marginStart = dp(STEPPER_DP + STEPPER_GAP_DP)
@@ -82,7 +64,7 @@ class Atc3NumberPicker @JvmOverloads constructor(
         layout.boxStrokeWidthFocused = 0
         val radius = dp(PILL_RADIUS_DP).toFloat()
         layout.setBoxCornerRadii(radius, radius, radius, radius)
-        layout.setBoxBackgroundColor(ContextCompat.getColor(context, R.color.atc3_halo_surface_2))
+        layout.setBoxBackgroundColor(ContextCompat.getColor(context, R.color.atc3_surface_2))
         // The stock padding is sized for a box that runs the whole width; here the number has a
         // narrow pill to sit in and needs all of it.
         binding.editText.setPadding(0, dp(VALUE_PADDING_DP), 0, dp(VALUE_PADDING_DP))
@@ -98,7 +80,6 @@ class Atc3NumberPicker @JvmOverloads constructor(
 
         /** Space between a stepper button and the value pill. */
         private const val STEPPER_GAP_DP = 4
-
         private const val PILL_RADIUS_DP = 17
         private const val STEPPER_PADDING_DP = 9
         private const val VALUE_PADDING_DP = 7

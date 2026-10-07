@@ -3,7 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/atc3_halo_bg"
+    android:background="@color/atc3_bg"
     android:orientation="vertical">
 
     <!-- Pull to refresh asks the pump for a status, which is what fills the screen. -->
@@ -15,7 +15,7 @@
 
         <include
             android:id="@+id/atc3_screen_status"
-            layout="@layout/atc3_halo_screen_status" />
+            layout="@layout/atc3_screen_status" />
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
     <!--
@@ -26,7 +26,7 @@
         android:id="@+id/atc3_save_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@drawable/atc3_halo_card_bg"
+        android:background="@drawable/atc3_card_bg"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingHorizontal="12dp"
@@ -36,7 +36,7 @@
 
         <TextView
             android:id="@+id/atc3_save_hint"
-            style="@style/ATC3.Halo.Caption"
+            style="@style/ATC3.Caption"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginEnd="10dp"
@@ -45,18 +45,18 @@
 
         <Button
             android:id="@+id/atc3_discard_button"
-            style="@style/ATC3.Halo.Button.Capsule"
+            style="@style/ATC3.Button.Capsule"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/atc3_halo_discard" />
+            android:text="@string/atc3_discard" />
 
         <Button
             android:id="@+id/atc3_save_button"
-            style="@style/ATC3.Halo.Button.Capsule.Filled"
+            style="@style/ATC3.Button.Capsule.Filled"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:text="@string/atc3_halo_save" />
+            android:text="@string/atc3_save" />
     </LinearLayout>
 
 </LinearLayout>
