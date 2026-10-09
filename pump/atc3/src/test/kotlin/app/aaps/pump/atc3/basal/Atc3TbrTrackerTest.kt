@@ -150,7 +150,7 @@ class Atc3TbrTrackerTest {
     fun `a stranger's stamp before our acknowledgement begins their row where ours began`() {
         // Ours acknowledged at :05 of the minute, a stranger's set at :30 and stamped with the
         // minute: the stamp is before our row. Ours is cut to nothing and theirs begins where ours
-        // did, which is where the pump's journal keeps both -- see Atc3TbrBook.
+        // did, which is where the pump's journal keeps both.
         val minute = now - now % 60_000L
         val (_, ours) = Atc3TbrTracker.startedByAaps(minute + 5_000L, 0.4, 30 * 60_000L, pumpTbr(minute, 30, rate = 0.4))
         val (actions, theirs) = step(
@@ -314,11 +314,8 @@ class Atc3TbrTrackerTest {
         val (_, ours) = Atc3TbrTracker.startedByAaps(now, rate = 1.25, durationMs = 30 * 60_000L)
         val pumpAt = now - 8_000L
         val (actions, entry) = step(ours, tbrRunning = true, rate = 1.25, phoneNow = now + 300_000L, durationMs = 30 * 60_000L, pumpStart = pumpTbr(pumpAt, 30))
-        val retime = assertInstanceOf(Atc3TbrAction.Retime::class.java, actions.single())
-        assertEquals(now, retime.timestamp)
-        assertEquals(pumpAt / 1000L, retime.utcSeconds)
-        assertEquals(ours.pumpId, retime.pumpId)
-        assertEquals(30 * 60_000L, retime.durationMs)
+        // Nothing for AAPS: the row stays where it began, only the ledger learns the pump's start.
+        assertEquals(Atc3TbrAction.None, actions.single())
         assertEquals(now, entry?.startedAtMs)
         assertEquals(pumpAt / 1000L, entry?.pumpStartUtcSeconds)
         assertEquals(pumpAt, entry?.pumpStartMs)
@@ -378,41 +375,6 @@ class Atc3TbrTrackerTest {
         assertEquals(3.0, start.rate, 1e-9)
         assertEquals(theirs / 1000L, entry?.pumpStartUtcSeconds)
         assertFalse(entry!!.ours)
-    }
-
-    @Test
-    fun `a stop worked out inside a temporary basal cuts it into the part before, the stop and the continuation`() {
-        val begun = now - 10 * 60_000L
-        val active = ActiveTbr(1L, begun, 3.0, ours = true, ownDurationMs = 30 * 60_000L, pumpStartUtcSeconds = begun / 1000L)
-        val stopAt = begun + 3 * 60_000L
-        val (actions, entry) = Atc3TbrTracker.splitByStop(active, stopAt, 100_000L)
-        assertEquals(4, actions.size)
-        val cut = assertInstanceOf(Atc3TbrAction.Stop::class.java, actions[0])
-        assertEquals(stopAt, cut.timestamp)
-        assertEquals(Atc3PumpId.tbrEndOf(1L), cut.endPumpId)
-        val pause = assertInstanceOf(Atc3TbrAction.Start::class.java, actions[1])
-        assertEquals(stopAt, pause.timestamp)
-        assertEquals(PumpSync.TemporaryBasalType.PUMP_SUSPEND, pause.type)
-        assertEquals(100_000L, pause.durationMs)
-        val resumed = assertInstanceOf(Atc3TbrAction.Stop::class.java, actions[2])
-        assertEquals(stopAt + 100_000L, resumed.timestamp)
-        val goOn = assertInstanceOf(Atc3TbrAction.Start::class.java, actions[3])
-        assertEquals(stopAt + 100_000L, goOn.timestamp)
-        assertEquals(3.0, goOn.rate, 1e-9)
-        assertEquals(begun + 30 * 60_000L - (stopAt + 100_000L), goOn.durationMs)
-        assertEquals(begun / 1000L, entry?.pumpStartUtcSeconds)
-        assertEquals(goOn.pumpId, entry?.pumpId)
-        assertNotEquals(1L, goOn.pumpId)
-    }
-
-    @Test
-    fun `a stop worked out at the very end of a temporary basal leaves no continuation`() {
-        // Thirty minutes started 29.5 minutes ago: a stop of 100 s begun a minute ago outlasts it.
-        val begun = now - 30 * 60_000L + 30_000L
-        val active = ActiveTbr(1L, begun, 3.0, ours = true, ownDurationMs = 30 * 60_000L, pumpStartUtcSeconds = begun / 1000L)
-        val (actions, entry) = Atc3TbrTracker.splitByStop(active, now - 60_000L, 100_000L)
-        assertEquals(3, actions.size)
-        assertNull(entry)
     }
 
     @Test

@@ -1,9 +1,7 @@
 package app.aaps.pump.atc3.check
 
-import app.aaps.core.data.model.TB
 import app.aaps.core.interfaces.db.PersistenceLayer
 import app.aaps.core.interfaces.profile.ProfileFunction
-import app.aaps.pump.atc3.basal.Atc3BasalFact
 import app.aaps.pump.atc3.clock.Atc3DayClock
 import app.aaps.pump.atc3.history.Atc3HistorySync
 import app.aaps.pump.atc3.state.Atc3PumpState
@@ -72,40 +70,11 @@ class Atc3AapsJournal @Inject constructor(
         }
     }
 
-    /** The scheduled rate at [atMs] in pump units, or null while a temporary basal row of this pump runs there. */
-    suspend fun scheduledRateAt(atMs: Long): Double? {
-        val serial = pumpState.serialNumber
-        val running = persistenceLayer.getTemporaryBasalActiveAt(atMs)
-        if (running != null && running.isValid && running.ids.pumpSerial == serial) return null
-        return profileFunction.getProfile(atMs)?.getBasal(atMs)
-    }
-
-    /** What the journal accounts for since [fromMs], for the day's account on the screen; boluses by their rows, which over hours is right. */
-    suspend fun insulinOfDay(fromMs: Long, toMs: Long): Atc3JournalArithmetic.Breakdown? =
-        insulinBetween(fromMs, toMs, bolusesBetween(fromMs, toMs))
-
     /** The boluses of this pump AAPS holds rows of in `[fromMs, toMs)`, summed. */
     suspend fun bolusesBetween(fromMs: Long, toMs: Long): Double {
         val serial = pumpState.serialNumber
         return persistenceLayer.getBolusesFromTimeToTime(fromMs, toMs, true)
             .filter { it.isValid && it.ids.pumpSerial == serial }
             .sumOf { it.amount }
-    }
-
-    /** The temporary basal rows of this pump in `[fromMs, toMs)`, see [Atc3BasalFact.writeBasalFact]. */
-    suspend fun rowsBetween(fromMs: Long, toMs: Long): List<Atc3BasalFact.JournalRow> {
-        val serial = pumpState.serialNumber
-        return persistenceLayer.getTemporaryBasalsActiveBetweenTimeAndTime(fromMs, toMs)
-            .filter { it.isValid && it.ids.pumpSerial == serial && it.timestamp < toMs }
-            .map {
-                Atc3BasalFact.JournalRow(
-                    pumpId = it.ids.pumpId,
-                    timestamp = it.timestamp,
-                    durationMs = it.duration,
-                    rate = it.rate,
-                    isAbsolute = it.isAbsolute,
-                    stop = it.type == TB.Type.PUMP_SUSPEND
-                )
-            }
     }
 }

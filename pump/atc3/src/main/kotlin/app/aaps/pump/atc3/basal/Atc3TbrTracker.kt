@@ -26,20 +26,7 @@ sealed interface Atc3TbrAction {
         val type: PumpSync.TemporaryBasalType
     ) : Atc3TbrAction
 
-    /**
-     * @param byStamp true when [timestamp] is a stamp of the pump's, up to a minute early: a finished
-     *   end, or the start of the one that replaced it; false for a known moment
-     */
-    data class Stop(val timestamp: Long, val endPumpId: Long, val byStamp: Boolean = false) : Atc3TbrAction
-
-    /** Our temporary basal, now known under the pump's start: the row keeps its time, the note takes the identity. */
-    data class Retime(
-        val timestamp: Long,
-        val utcSeconds: Long,
-        val rate: Double,
-        val durationMs: Long,
-        val pumpId: Long
-    ) : Atc3TbrAction
+    data class Stop(val timestamp: Long, val endPumpId: Long) : Atc3TbrAction
 
     data object None : Atc3TbrAction
 }
@@ -136,8 +123,7 @@ object Atc3TbrTracker {
                 phoneNow >= expectedEnd -> expectedEnd
                 else                    -> phoneNow
             }
-            val byStamp = !active.suspension && endedAtMs != null && end == endedAtMs
-            return listOf(Atc3TbrAction.Stop(end, endIdOf(active), byStamp)) to null
+            return listOf(Atc3TbrAction.Stop(end, endIdOf(active))) to null
         }
 
         if (suspended) {
@@ -187,12 +173,9 @@ object Atc3TbrTracker {
         val otherRate = abs(rate - active.rate) > Atc3Protocol.DOSE_SCALE / 2
         val otherDuration = durationMs != null && otherDuration(active, durationMs)
         if (!otherRate && !otherDuration && pumpStart != null && isOurCommand(active, pumpStart)) {
-            // The row stays at the acknowledgement; the stamp is its identity.
-            val utcSeconds = pumpStart.utcSeconds!!
-            val known = active.copy(pumpStartUtcSeconds = utcSeconds, pumpStartMs = pumpStart.atMs)
-            return listOf(
-                Atc3TbrAction.Retime(active.startedAtMs, utcSeconds, active.rate, active.ownDurationMs, active.pumpId)
-            ) to known
+            // The row stays at the acknowledgement; the stamp is its identity, kept in the ledger only.
+            val known = active.copy(pumpStartUtcSeconds = pumpStart.utcSeconds!!, pumpStartMs = pumpStart.atMs)
+            return listOf(Atc3TbrAction.None) to known
         }
         val expired = !active.suspension &&
             phoneNow >= active.startedAtMs + active.ownDurationMs + EXPIRY_GRACE_MS
@@ -212,34 +195,9 @@ object Atc3TbrTracker {
         val ranOut = if (active.suspension) Long.MAX_VALUE else active.startedAtMs + active.ownDurationMs
         // Not before the row closed began; the one before is then cut to nothing, as the journal has both.
         val newAt = (anchored?.atMs ?: phoneNow).coerceAtLeast(active.startedAtMs)
-        val stop = Atc3TbrAction.Stop(minOf(newAt, ranOut), endIdOf(active), byStamp = anchored != null && newAt < ranOut)
+        val stop = Atc3TbrAction.Stop(minOf(newAt, ranOut), endIdOf(active))
         val (start, entry) = start(phoneNow, rate, runsFor, ours = false, begin = anchored, previous = active, rowAtMs = newAt)
         return listOf(stop, start) to entry
-    }
-
-    /**
-     * A stop between two ticks inside a running temporary basal, from the pump's count: the row cut at
-     * the stop, the stop, and the temporary basal going on after it under its own identity.
-     *
-     * @return the actions, and the continuation now open, or null when its time was over by the stop's end
-     */
-    fun splitByStop(active: ActiveTbr, stopMs: Long, lengthMs: Long): Pair<List<Atc3TbrAction>, ActiveTbr?> {
-        require(!active.suspension) { "a stop cannot be cut into a stop" }
-        val stopAt = maxOf(stopMs, active.startedAtMs)
-        val resumeAt = stopAt + lengthMs
-        val actions = ArrayList<Atc3TbrAction>(4)
-        actions.add(Atc3TbrAction.Stop(stopAt, endIdOf(active)))
-        val (pauseStart, pause) = start(stopAt, 0.0, lengthMs, ours = false, suspension = true, previous = active)
-        actions.add(pauseStart)
-        actions.add(Atc3TbrAction.Stop(resumeAt, endIdOf(pause)))
-        val remaining = active.startedAtMs + active.ownDurationMs - resumeAt
-        if (remaining <= 0L) return actions to null
-        val (goOn, entry) = start(
-            resumeAt, active.rate, remaining, ours = false, previous = pause,
-            identityUtcSeconds = active.pumpStartUtcSeconds, pumpStartMs = active.pumpStartMs
-        )
-        actions.add(goOn)
-        return actions to entry
     }
 
     /**

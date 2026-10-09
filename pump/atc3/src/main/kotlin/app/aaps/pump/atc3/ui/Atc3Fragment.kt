@@ -264,7 +264,7 @@ class Atc3Fragment : DaggerFragment() {
 
     /**
      * The day so far by the AAPS journal and by the pump's count, and how far apart: the journal's sum
-     * shown on the pump's nearest step, counted from midnight or the last beginning, which is then named.
+     * shown on the pump's nearest step, both counted from midnight.
      */
     private fun updateDayAccount(binding: Atc3FragmentBinding) {
         val day = pumpState.dayAccount
@@ -272,9 +272,7 @@ class Atc3Fragment : DaggerFragment() {
             rh.gs(R.string.atc3_day_account_none)
         } else {
             val aapsUnits = Math.round(day.aapsUnits / Atc3Protocol.DOSE_SCALE) * Atc3Protocol.DOSE_SCALE
-            val since = day.sinceMs
-            if (since == null) rh.gs(R.string.atc3_day_account_value, aapsUnits, day.pumpUnits, day.pumpUnits - aapsUnits)
-            else rh.gs(R.string.atc3_day_account_value_since, aapsUnits, day.pumpUnits, day.pumpUnits - aapsUnits, dateUtil.timeString(since))
+            rh.gs(R.string.atc3_day_account_value, aapsUnits, day.pumpUnits, day.pumpUnits - aapsUnits)
         }
     }
 
@@ -485,8 +483,6 @@ class Atc3Fragment : DaggerFragment() {
             )
         }
         rows.atc3RowPassword.setOnClickListener { showPasswordDialog() }
-        rows.atc3ExactBasalSwitch.isChecked = preferences.get(Atc3BooleanKey.ExactBasal)
-        rows.atc3ExactBasalSwitch.setOnCheckedChangeListener { _, on -> preferences.put(Atc3BooleanKey.ExactBasal, on) }
         rows.atc3HoldLinkSwitch.isChecked = preferences.get(Atc3BooleanKey.HoldLink)
         rows.atc3HoldLinkSwitch.setOnCheckedChangeListener { _, on -> preferences.put(Atc3BooleanKey.HoldLink, on) }
         rows.atc3TraceSwitch.isChecked = preferences.get(Atc3BooleanKey.Trace)

@@ -5,6 +5,7 @@ import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.rx.bus.RxBus
+import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventPumpStatusChanged
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.keys.interfaces.Preferences
@@ -75,7 +76,30 @@ class Atc3Connection @Inject constructor(
     @Volatile private var closeReason: String = "link"
 
     /** True once the user has been told that no password is entered, until one is. */
-    private var passwordMissingSaid = false
+    @Volatile private var passwordMissingSaid = false
+
+    /** Why the last ask for a link was refused, null when it went to the pump: what has been said. */
+    @Volatile private var refusedFor: Refusal? = null
+
+    /**
+     * Why an ask for a link is refused. The queue asks once a second while it waits, so each reason is
+     * said once, when it begins, see [tell].
+     *
+     * @param message what the log says
+     * @param isError true for a reason the user has to act on
+     */
+    private enum class Refusal(val message: String, val isError: Boolean) {
+
+        NO_SERIAL("serial number is not configured, cannot connect", true),
+        NO_PASSWORD("no Bluetooth password is entered in AAPS, not working with the pump", true),
+        PAIRING_REFUSED("the pump on trial refused its password, not trying again", false),
+        NO_BLUETOOTH("the phone has no Bluetooth", true),
+        BLUETOOTH_OFF("the phone's Bluetooth is off, not connecting to the pump", true),
+        WAITING("waiting before trying the link again", false),
+        PASSWORD_GIVEN_UP("the pump refused this Bluetooth password too many times, not trying again until it is changed", true),
+        NO_ADDRESS("no pump address configured", true),
+        BAD_ADDRESS("the pump address is not a Bluetooth address", true)
+    }
 
     // The password
 
@@ -98,9 +122,9 @@ class Atc3Connection @Inject constructor(
      * lets in a link rather than a client. A pump with no password is entered as `000000`.
      */
     private fun refuseWithoutPassword() {
-        aapsLogger.error(LTag.PUMP, "ATC3: no Bluetooth password is entered in AAPS, not working with the pump")
         if (passwordMissingSaid) return
         passwordMissingSaid = true
+        aapsLogger.error(LTag.PUMP, "ATC3: ${Refusal.NO_PASSWORD.message}")
         trace.event(Atc3TraceCat.SESS, "no_password")
         uiInteraction.addNotification(Notification.PUMP_ERROR, rh.gs(R.string.atc3_password_missing), Notification.URGENT)
         rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
@@ -108,25 +132,74 @@ class Atc3Connection @Inject constructor(
 
     // Bringing the link up and letting it go
 
-    fun connect(reason: String): Boolean {
-        aapsLogger.debug(LTag.PUMP, "ATC3: connect, reason $reason")
-        if (!isConfigured) {
-            aapsLogger.error(LTag.PUMP, "ATC3: serial number is not configured, cannot connect")
-            return false
-        }
-        if (!checkPassword()) return false
-        if (pairing.refused) {
-            aapsLogger.debug(LTag.PUMP, "ATC3: the pump on trial refused its password, not trying again")
-            rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
-            return false
-        }
+    /**
+     * Why an ask for a link is refused now, null when it may go to the pump. It asks the pump nothing and
+     * tells nobody: what is said is decided in [tell].
+     */
+    private fun refusalNow(password: String, address: String): Refusal? = when {
+        !isConfigured                                                      -> Refusal.NO_SERIAL
+        !isPasswordEntered                                                 -> Refusal.NO_PASSWORD
+        pairing.refused                                                    -> Refusal.PAIRING_REFUSED
+        !atc3BLE.hasBluetooth                                              -> Refusal.NO_BLUETOOTH
+        // Before the wait, so the user hears of it at once.
+        !atc3BLE.isBluetoothOn                                             -> Refusal.BLUETOOTH_OFF
         // A refused attempt is not a wakeup of the pump and is not traced as one.
-        val waiting = atc3BLE.backoffRemainingMs
-        if (waiting > 0) {
-            aapsLogger.debug(LTag.PUMP, "ATC3: still waiting ${waiting}ms before trying the link again")
+        atc3BLE.backoffRemainingMs > 0                                     -> Refusal.WAITING
+        password == authFailedFor && authFailures >= Atc3Const.AUTH_MAX_ATTEMPTS -> Refusal.PASSWORD_GIVEN_UP
+        address.isBlank()                                                  -> Refusal.NO_ADDRESS
+        !atc3BLE.isValidAddress(address)                                   -> Refusal.BAD_ADDRESS
+        else                                                               -> null
+    }
+
+    /**
+     * Say why asks are refused, once, when the reason begins, and take back what was said of the reason
+     * it follows. Null is an ask that went to the pump: the next refusal is said again.
+     */
+    private fun tell(refusal: Refusal?) {
+        val before = refusedFor
+        if (refusal == before) return
+        refusedFor = refusal
+        when (before) {
+            Refusal.BLUETOOTH_OFF -> rxBus.send(EventDismissNotification(Notification.BLUETOOTH_NOT_ENABLED))
+            // The next time it is missing is told again.
+            Refusal.NO_PASSWORD   -> passwordMissingSaid = false
+            else                  -> {}
+        }
+        if (refusal == null) return
+        trace.event(Atc3TraceCat.SESS, "refused", "why" to refusal.name.lowercase())
+        when (refusal) {
+            // Shared with the exchanges, which are refused for it too: told once for both.
+            Refusal.NO_PASSWORD   -> refuseWithoutPassword()
+            Refusal.BLUETOOTH_OFF -> {
+                aapsLogger.error(LTag.PUMP, "ATC3: ${refusal.message}")
+                uiInteraction.addNotification(Notification.BLUETOOTH_NOT_ENABLED, rh.gs(R.string.atc3_bluetooth_off), Notification.NORMAL)
+            }
+            else                  ->
+                if (refusal.isError) aapsLogger.error(LTag.PUMP, "ATC3: ${refusal.message}")
+                else aapsLogger.debug(LTag.PUMP, "ATC3: ${refusal.message}")
+        }
+    }
+
+    /**
+     * Ask for a link. The queue asks once a second while it waits: only an ask that goes to the pump is
+     * logged, and a refusal once for each reason, see [Refusal].
+     */
+    fun connect(reason: String): Boolean {
+        // Read before every attempt: the user can change it between two connections.
+        val password = preferences.get(Atc3StringKey.Atc3BtPassword)
+        // A different password is a different question, with tries of its own.
+        if (password != authFailedFor) {
+            authFailures = 0
+            authFailedFor = password
+        }
+        val address = preferences.get(Atc3StringKey.Atc3Address)
+        val refusal = refusalNow(password, address)
+        tell(refusal)
+        if (refusal != null) {
             rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
             return false
         }
+        aapsLogger.debug(LTag.PUMP, "ATC3: connect, reason $reason")
         // A link already up is not a new one.
         if (isConnected || isConnecting) {
             trace.event(Atc3TraceCat.SESS, "reuse", "reason" to reason, "connected" to isConnected)
@@ -136,24 +209,8 @@ class Atc3Connection @Inject constructor(
         closeReason = reason
         atc3BLE.setCallback(this)
         rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.CONNECTING))
-        // Told before every attempt: the user can change the password between two connections.
-        val password = preferences.get(Atc3StringKey.Atc3BtPassword)
-        // A different password is a different question, with tries of its own.
-        if (password != authFailedFor) {
-            authFailures = 0
-            authFailedFor = password
-        }
-        if (authFailures >= Atc3Const.AUTH_MAX_ATTEMPTS) {
-            aapsLogger.error(
-                LTag.PUMP,
-                "ATC3: not connecting, the pump refused this Bluetooth password $authFailures times"
-            )
-            trace.event(Atc3TraceCat.SESS, "auth_locked", "after" to authFailures)
-            rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
-            return false
-        }
         atc3BLE.setPassword(password)
-        val started = atc3BLE.connect(preferences.get(Atc3StringKey.Atc3Address))
+        val started = atc3BLE.connect(address)
         if (!started) rxBus.send(EventPumpStatusChanged(EventPumpStatusChanged.Status.DISCONNECTED))
         return started
     }

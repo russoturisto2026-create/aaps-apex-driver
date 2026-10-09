@@ -15,22 +15,23 @@
     <string name="atc3_refused_by_pump">Pump refused the command. Check the limits set on the pump.</string>
     <string name="atc3_alarm_stop_locked">The pump is delivering nothing under its alarm and is locked, so it cannot be stopped from here. Unlock the pump and stop it.</string>
     <string name="atc3_no_delivery">The pump reports that it is delivering, but the reservoir has not moved. Check the pump and the infusion set.</string>
-    <string name="atc3_command_data_changed">The pump records changed what AAPS knew; the loop will decide again on the corrected data</string>
-    <string name="atc3_journal_shortfall">The pump delivered %1$.3f U less than the AAPS journal accounts for, and its journals do not explain it. Check that the pump is delivering.</string>
-    <string name="atc3_journal_unexplained">The pump counted %1$.3f U more than the AAPS journal accounts for, and its journals do not explain it. Check the pump.</string>
+    <string name="atc3_command_data_changed">A bolus the loop did not know of was found on the pump; the loop will decide again</string>
     <string name="atc3_no_delivery_loop_blocked">The pump is not delivering the insulin it reports. The loop is stopped until the pump has been checked.</string>
+    <string name="atc3_extended_loop_blocked">Extended and dual boluses are allowed on the pump. The loop does not run until they are turned off in the pump\'s settings.</string>
     <string name="atc3_link_silent">Apex: the pump has not answered for %1$d min. Check the pump and the phone\'s Bluetooth.</string>
     <string name="atc3_link_stopped">Apex: the pump has not answered for %1$d min. AAPS has stopped: the loop does not run and no basal is counted until the pump answers.</string>
     <string name="atc3_link_loop_blocked">The pump has not answered for over half an hour. The loop is stopped until it answers.</string>
     <string name="atc3_link_wait">Apex: waiting for the pump to answer</string>
-    <string name="atc3_link_back_reset">Apex: the pump is back after %1$d min with its count of delivered insulin begun anew, so what it delivered over that time cannot be counted: recorded as no basal. Check the pump.</string>
-    <string name="atc3_link_back_midnight">Apex: the pump is back after %1$d min. What it delivered before midnight could not be read from it and is recorded as no basal. Check the pump.</string>
     <string name="atc3_firmware_no_password">Pump firmware %1$s has no Bluetooth password: anything within radio range can control this pump. Have the firmware updated to %2$s or newer.</string>
     <string name="atc3_pump_locked">The pump is locked and refuses every command. It can only be unlocked on the pump itself.</string>
     <string name="atc3_bolus_failed">Bolus could not be delivered</string>
     <string name="atc3_bolus_cancelled">Bolus cancelled, no insulin was delivered</string>
     <string name="atc3_bolus_zero">Nothing to deliver</string>
-    <string name="atc3_bolus_unconfirmed">Bolus delivered. The pump has not confirmed the amount yet, it will be corrected on the next connection.</string>
+    <string name="atc3_bolus_unconfirmed">Bolus delivered. The pump has not written it down yet; it reaches AAPS when it does.</string>
+    <string name="atc3_journal_fault_own">Pump journal failure: the pump did not write down the bolus of %1$s. %2$.2f U, the last amount seen of it, were entered as a bolus without delivery. Check the pump.</string>
+    <string name="atc3_journal_fault_between" comment="Fills %1$s of atc3_journal_fault_count and atc3_journal_fault_unknown: two times of day">between %1$s and %2$s</string>
+    <string name="atc3_journal_fault_count">Pump journal failure: the pump did not write down a bolus given %1$s. %2$.2f U by the pump\'s count were entered as a bolus without delivery. Check the pump.</string>
+    <string name="atc3_journal_fault_unknown">Pump journal failure: the pump did not write down a bolus given %1$s, and its amount is not known. Check the pump and enter the bolus by hand.</string>
     <string name="atc3_bolus_short">The pump delivered %1$.2f U of the %2$.2f U asked for</string>
     <string name="atc3_confirm_stop">Stop the pump? It will deliver no basal and no bolus until it is resumed.</string>
     <string name="atc3_confirm_resume">Resume the pump and let it deliver again?</string>
@@ -48,9 +49,9 @@
     <string name="atc3_alarm_daily_limit">daily dose limit reached, the pump delivers nothing more today</string>
     <string name="atc3_alarm_reservoir_empty">reservoir empty</string>
     <string name="atc3_alarm_unknown">alarm code %1$d</string>
-    <string name="atc3_smb_data_changed">Microbolus refused: the pump\'s count of delivered insulin does not agree with what AAPS holds, or its records could not be read. The loop will recalculate.</string>
+    <string name="atc3_smb_data_changed">Microbolus refused: a bolus the loop did not know of was found on the pump, or its records could not be read. The loop will recalculate.</string>
     <string name="atc3_smb_stale_iob">Microbolus refused: insulin was delivered on the pump after the loop calculated. The loop will recalculate with it included.</string>
-    <string name="atc3_extended_imported">Extended bolus of %1$.2f U recorded as a normal bolus given at its start</string>
+    <string name="atc3_extended_not_counted">The pump gave an extended or dual bolus of %1$.2f U at %2$s. The loop does not count it: enter %1$.2f U as a bolus without delivery.</string>
     <string name="atc3_history_start">AAPS starts recording this Apex pump now. Anything it delivered earlier is not imported.</string>
     <string name="atc3_clock_follows_phone">Apex: the phone time changed, the pump clock was set to follow it.</string>
     <string name="atc3_clock_set_after_drift">Apex: the pump clock was %1$d min away from the phone and was set to the phone time.</string>
@@ -131,11 +132,11 @@
     <string name="atc3_trace_title">Write the driver trace</string>
     <string name="atc3_trace_summary">One line per event in the AAPS log, for measuring how often the pump is contacted and in what order things happen</string>
     <string name="atc3_half_hour_read">Apex: reading the pump\'s count at the half hour</string>
-    <string name="atc3_exact_basal_title">Record basal as delivered</string>
-    <string name="atc3_exact_basal_summary">Off: temporary basals stay in the history as they were ordered. On: every passed half hour is written as one basal record at the rate the pump\'s own delivery count gives it, in place of the records of the commands, so that insulin on board follows what was actually delivered.</string>
     <string name="atc3_hold_link_title">Keep the pump connection open</string>
     <string name="atc3_hold_link_summary">Stay connected between exchanges instead of reconnecting every few minutes. The pump sends a signal every three minutes, and the connection is dropped and rebuilt if that stops arriving. Turn this off only if the connection proves unreliable on this phone.</string>
     <string name="atc3_password_given_up">The pump refused the Bluetooth password ten times, so the driver has stopped trying. Read the current B/P from the pump status screen and enter it in the Apex settings.</string>
+    <string name="atc3_bluetooth_off">The phone\'s Bluetooth is off. The driver does not connect to the pump until it is on.</string>
+    <string name="atc3_state_set_aside">Apex: the driver\'s saved state could not be read in full. It was kept aside, and the driver took stock of the pump again. Check the last boluses in Treatments.</string>
     <string name="atc3_password_missing">No Bluetooth password is entered in AAPS, so the driver is not working with the pump. Connect the pump on the Apex pump connection screen: its serial, then the current B/P from the pump status screen; for a pump with its password switched off, enter 000000.</string>
     <string name="atc3_password_loop_blocked">No Bluetooth password is entered in AAPS. The loop is stopped until one is.</string>
     <string name="atc3_password_rejected">The pump refused the Bluetooth password. Read the current B/P from the pump status screen and enter it again.</string>
@@ -157,12 +158,10 @@
 
     <string name="atc3_password_random">Random</string>
 
-    <string name="atc3_exact_basal_caption">Every passed half hour as one record at what the pump counted, in place of the commands</string>
     <string name="atc3_hold_link_caption">Stay connected between exchanges instead of reconnecting each time</string>
     <string name="atc3_driver_version_label">Driver version</string>
     <string name="atc3_day_account_label">Delivered today: AAPS and the pump</string>
     <string name="atc3_day_account_value">AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
-    <string name="atc3_day_account_value_since">since %4$s · AAPS %1$.3f U · pump %2$.3f U · difference %3$+.3f U</string>
     <string name="atc3_day_account_none">not compared yet</string>
     <string name="atc3_trace_label">Driver trace</string>
     <string name="atc3_trace_caption">Machine readable log for bench captures, off unless one is being taken</string>

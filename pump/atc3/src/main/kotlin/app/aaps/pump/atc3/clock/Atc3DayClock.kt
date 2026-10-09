@@ -6,6 +6,7 @@ import java.util.Calendar
 internal object Atc3DayClock {
 
     const val HALF_HOUR_MS = 30 * 60_000L
+    const val DAY_MS = 24 * 60 * 60_000L
 
     /** The start of the half hour of the clock [ms] lies in. */
     fun halfHourOf(ms: Long): Long = Calendar.getInstance().apply {

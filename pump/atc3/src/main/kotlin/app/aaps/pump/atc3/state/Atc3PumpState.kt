@@ -48,6 +48,9 @@ class Atc3PumpState @Inject constructor() {
         val tbrDurationMinutes: Int get() = if (status.tbrActive) status.tbrDurationMinutes else 0
         val tbrElapsedMinutes: Int get() = if (status.tbrActive) status.tbrElapsedMinutes else 0
 
+        /** The length the running temporary basal was started for, or null when none runs or the pump gave none. */
+        val tbrDurationMs: Long? get() = tbrDurationMinutes.takeIf { it > 0 }?.let { it * 60_000L }
+
         /** No insulin is leaving the pump: stopped, or held by an alarm that stops delivery. */
         val notDelivering: Boolean get() = status.suspended || status.activeAlarms.any { it.stopsDelivery }
     }
@@ -64,13 +67,7 @@ class Atc3PumpState @Inject constructor() {
     @Volatile var lastConnection: Long = 0L
 
     /** The day so far by the AAPS journal and by the pump's count, for the driver's screen; null until compared once. */
-    data class DayAccount(
-        val aapsUnits: Double,
-        val pumpUnits: Double,
-        val atMs: Long,
-        /** Where the two are counted from when that is not the pump's midnight: the last beginning. */
-        val sinceMs: Long? = null
-    )
+    data class DayAccount(val aapsUnits: Double, val pumpUnits: Double, val atMs: Long)
 
     @Volatile var dayAccount: DayAccount? = null
 
@@ -157,6 +154,7 @@ class Atc3PumpState @Inject constructor() {
 
     /** Forget what was known of the pump: another pump, or this one paired afresh. */
     fun reset() {
+        serialNumber = ""
         statusCard = null
         statusV2 = null
         profiles = null

@@ -1,15 +1,5 @@
 package app.aaps.pump.atc3.protocol
 
-import app.aaps.pump.atc3.history.Atc3BolusReconciler
-
-/** The four raw amounts of a bolus record: its identity, compared as integers without tolerance. */
-data class Atc3BolusFingerprint(
-    val rawRequested: Int,
-    val rawDelivered: Int,
-    val rawExtendedRequested: Int,
-    val rawExtendedDelivered: Int
-)
-
 /**
  * One bolus record of the pump's history. Asked and delivered amounts are kept apart, so that a
  * bolus cut short is recorded at what it delivered; an extended part is read as well, so that an
@@ -19,8 +9,9 @@ data class Atc3BolusRecord(
     /** Position in the answer, 0 the newest; reused by the pump, never an identity. */
     val index: Int,
     /**
-     * The minute the bolus started, on the pump's clock, milliseconds: what a record is matched to a
-     * bolus of ours on, with the dose ([app.aaps.pump.atc3.history.Atc3BolusReconciler]).
+     * The pump's stamp on the phone's time, milliseconds: the minute the bolus started, with the
+     * seconds being the record's place in that minute, not a time. The row is dated by the minute,
+     * see [app.aaps.pump.atc3.history.Atc3BolusReconciler].
      */
     val timestamp: Long,
     /** The same stamp as a UTC-calendar key, see [Atc3StatusV1.decodeClockUtcSeconds]. */
@@ -47,25 +38,12 @@ data class Atc3BolusRecord(
 
     val totalDeliveredUnits: Double get() = deliveredUnits + extendedDeliveredUnits
 
-    /**
-     * What AAPS is told this bolus delivered, U: both parts as one ordinary bolus. The record has no
-     * duration for an extended part, and counting it all now overstates insulin on board for a while,
-     * the safer of the two errors.
-     */
-    val aapsUnits: Double get() = totalDeliveredUnits
-
     /** True for an extended or a dual bolus. */
     val carriesExtendedPart: Boolean get() = rawExtendedRequested != 0 || rawExtendedDelivered != 0
 
     /** True when every amount is zero: nothing to record. */
     val isEmptyRecord: Boolean
         get() = rawRequested == 0 && rawDelivered == 0 && rawExtendedRequested == 0 && rawExtendedDelivered == 0
-
-    /** True when less was delivered than asked for. */
-    val isIncomplete: Boolean get() = totalDeliveredUnits < totalRequestedUnits - HALF_STEP
-
-    val fingerprint: Atc3BolusFingerprint
-        get() = Atc3BolusFingerprint(rawRequested, rawDelivered, rawExtendedRequested, rawExtendedDelivered)
 
     companion object {
 
@@ -74,7 +52,6 @@ data class Atc3BolusRecord(
         private const val DELIVERED_OFFSET = 14
         private const val EXTENDED_REQUESTED_OFFSET = 16
         private const val EXTENDED_DELIVERED_OFFSET = 18
-        private const val HALF_STEP = Atc3Protocol.DOSE_SCALE / 2
         const val FRAME_SIZE = 22
 
         /** The record, or null when the frame is not one; the periodic search and the full history carry the same layout. */
@@ -102,7 +79,7 @@ data class Atc3BolusRecord(
 
 /**
  * One answer to a bolus history read: its records in arrival order, and the record count the pump
- * declared. A count above the records sent says records have aged out of the periodic search, see
+ * declared. A count above the records sent says the answer is the newest part only, see
  * [app.aaps.pump.atc3.history.Atc3BolusReconciler.recordsMissing].
  */
 data class Atc3BolusHistory(

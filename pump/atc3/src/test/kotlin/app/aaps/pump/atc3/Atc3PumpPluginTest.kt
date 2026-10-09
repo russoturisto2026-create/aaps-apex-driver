@@ -7,22 +7,23 @@ import app.aaps.core.interfaces.notifications.Notification
 import app.aaps.core.interfaces.pump.BolusProgressData
 import app.aaps.core.interfaces.pump.DetailedBolusInfo
 import app.aaps.core.interfaces.pump.PumpEnactResult
+import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.rx.events.EventAPSCalculationFinished
 import app.aaps.core.interfaces.rx.events.EventDismissNotification
 import app.aaps.core.interfaces.rx.events.EventNewBG
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.objects.constraints.ConstraintObject
-import app.aaps.pump.atc3.basal.Atc3BasalFact
 import app.aaps.pump.atc3.basal.Atc3BasalPeriodKeeper
+import app.aaps.pump.atc3.basal.Atc3BasalSpread
 import app.aaps.pump.atc3.check.Atc3AapsJournal
 import app.aaps.pump.atc3.check.Atc3JournalArithmetic
 import app.aaps.pump.atc3.check.Atc3Reconciliation
-import app.aaps.pump.atc3.check.Atc3StateCheck
 import app.aaps.pump.atc3.clock.Atc3ClockKeeper
 import app.aaps.pump.atc3.clock.Atc3ClockWatch
 import app.aaps.pump.atc3.clock.Atc3DayClock
 import app.aaps.pump.atc3.command.Atc3BolusDelivery
+import app.aaps.pump.atc3.Atc3Const
 import app.aaps.pump.atc3.command.Atc3BolusOutcome
 import app.aaps.pump.atc3.command.Atc3Failure
 import app.aaps.pump.atc3.command.Atc3ProbeLink
@@ -30,9 +31,8 @@ import app.aaps.pump.atc3.command.Atc3SetSuspended
 import app.aaps.pump.atc3.command.Atc3TbrResult
 import app.aaps.pump.atc3.history.Atc3HistoryEvents
 import app.aaps.pump.atc3.history.Atc3HistorySync
-import app.aaps.pump.atc3.keys.Atc3BooleanKey
+import app.aaps.pump.atc3.history.Atc3JournalFault
 import app.aaps.pump.atc3.keys.Atc3StringKey
-import app.aaps.pump.atc3.keys.Atc3StringNonKey
 import app.aaps.pump.atc3.link.Atc3Connection
 import app.aaps.pump.atc3.link.Atc3LinkKeeper
 import app.aaps.pump.atc3.link.Atc3LinkProtection
@@ -48,6 +48,7 @@ import app.aaps.pump.atc3.protocol.Atc3Version
 import app.aaps.pump.atc3.state.Atc3PumpState
 import app.aaps.pump.atc3.state.currentCard
 import app.aaps.pump.atc3.state.editStatus
+import app.aaps.pump.atc3.store.Atc3Store
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.shared.tests.TestBaseWithProfile
 import com.google.common.truth.Truth.assertThat
@@ -77,18 +78,17 @@ import java.util.Calendar
  * The barrier that keeps AAPS from acting on a stale idea of what the pump has delivered.
  *
  * The cases here are the ones that matter for safety rather than for the protocol: that a command
- * which changes delivery reads the pump's boluses first, that reading is skipped when it was just
- * done, and that a microbolus decided without knowing about a bolus given on the pump is refused
- * rather than stacked on top of it.
+ * which changes delivery reads the pump's boluses first, and that a microbolus decided without
+ * knowing about a bolus given on the pump is refused rather than stacked on top of it.
  */
 class Atc3PumpPluginTest : TestBaseWithProfile() {
 
     @Mock lateinit var atc3Manager: Atc3Manager
+    @Mock lateinit var pumpSync: PumpSync
     @Mock lateinit var bolusDelivery: Atc3BolusDelivery
     @Mock lateinit var atc3Connection: Atc3Connection
     @Mock lateinit var atc3HistorySync: Atc3HistorySync
     @Mock lateinit var historyEvents: Atc3HistoryEvents
-    @Mock lateinit var basalFact: Atc3BasalFact
     @Mock lateinit var aapsJournal: Atc3AapsJournal
     @Mock lateinit var commandQueue: CommandQueue
     @Mock lateinit var uiInteraction: UiInteraction
@@ -102,6 +102,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     private lateinit var plugin: Atc3PumpPlugin
     private lateinit var clockKeeper: Atc3ClockKeeper
     private lateinit var linkKeeper: Atc3LinkKeeper
+    private lateinit var store: Atc3Store
 
     /** An answer carrying nothing, which is enough for every case here. */
     private val emptyHistory = Atc3BolusHistory(emptyList(), 0)
@@ -137,23 +138,24 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         // Stubbing a suspend function means calling it, and this runs outside a test coroutine.
         runBlocking {
             whenever(atc3HistorySync.reconcileBoluses(any(), any())).thenReturn(Atc3HistorySync.ReconcileResult())
+            whenever(aapsJournal.bolusesBetween(any(), any())).thenReturn(0.0)
         // A suspend function returns Object on the JVM, so an unstubbed mock answers null where a
         // plain signature would have answered false or 0, and the driver dies unboxing it. These say
         // the uninteresting thing — the write went in — so each case can stub over it when the
         // answer is what it is about.
             whenever(historyEvents.recordDailyTotals(any())).thenReturn(0)
             whenever(historyEvents.recordRefills(any())).thenReturn(0)
-            whenever(atc3HistorySync.reconcileTbrHistory(any())).thenReturn(0)
-            whenever(atc3HistorySync.recordDerivedStopInTbr(any(), any(), any())).thenReturn(false)
         }
         whenever(commandQueue.readStatus(any(), anyOrNull())).thenReturn(true)
         val trace = Atc3Trace(aapsLogger, preferences)
         clockKeeper = Atc3ClockKeeper(aapsLogger, rh, rxBus, uiInteraction, dateUtil, pumpState, atc3Manager, atc3HistorySync, clockWatch, trace)
-        val basalPeriods = Atc3BasalPeriodKeeper(aapsLogger, rh, preferences, dateUtil, commandQueue, pumpState, atc3Manager, atc3HistorySync, aapsJournal, trace, basalFact)
-        linkKeeper = Atc3LinkKeeper(aapsLogger, rh, preferences, dateUtil, commandQueue, rxBus, uiInteraction, pumpState, atc3Connection, atc3HistorySync, aapsJournal, basalPeriods, trace, basalFact)
-        val reconciliation = Atc3Reconciliation(
-            aapsLogger, rh, rxBus, uiInteraction, dateUtil, pumpState, atc3Manager, atc3HistorySync, aapsJournal, Atc3StateCheck(), linkKeeper, trace
+        store = Atc3Store(aapsLogger, preferences, uiInteraction, rh)
+        val journalFault = Atc3JournalFault(aapsLogger, rh, dateUtil, uiInteraction, pumpSync, atc3Manager, atc3HistorySync, pumpState, trace)
+        val reconciliation = Atc3Reconciliation(aapsLogger, rh, rxBus, uiInteraction, pumpState, atc3Manager, atc3HistorySync, journalFault, aapsJournal, store, trace)
+        val basalPeriods = Atc3BasalPeriodKeeper(
+            aapsLogger, rh, store, dateUtil, commandQueue, pumpState, atc3Manager, atc3HistorySync, aapsJournal, reconciliation, trace, Atc3BasalSpread()
         )
+        linkKeeper = Atc3LinkKeeper(aapsLogger, rh, preferences, store, dateUtil, commandQueue, rxBus, uiInteraction, pumpState, atc3Connection, atc3HistorySync, trace)
         plugin = Atc3PumpPlugin(
             aapsLogger, rh, preferences, commandQueue, pumpState, atc3Manager, bolusDelivery, rxBus,
             uiInteraction,
@@ -402,10 +404,10 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         assertThat(result.enacted).isFalse()
         assertThat(result.isTempCancel).isTrue()
         verify(atc3Manager, never()).cancelTempBasal()
-        verify(atc3HistorySync, never()).tbrStopped(any(), any(), anyOrNull())
+        verify(atc3HistorySync, never()).tbrStopped(any())
         // The stop is written from the status all the same: a short pause can be over before the
         // next tick, and skipping this would leave it out of AAPS.
-        verify(atc3HistorySync, times(1)).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+        verify(atc3HistorySync, times(1)).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
     }
 
     @Test
@@ -440,7 +442,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         assertThat(result.success).isTrue()
         assertThat(result.enacted).isFalse()
         verify(atc3Manager, never()).cancelTempBasal()
-        verify(atc3HistorySync, never()).tbrStopped(any(), any(), anyOrNull())
+        verify(atc3HistorySync, never()).tbrStopped(any())
     }
 
     @Test
@@ -455,7 +457,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         assertThat(result.isTempCancel).isTrue()
         verify(atc3Manager, never()).cancelTempBasal()
         // AAPS's own copy may still be open, from a temporary basal stopped on the pump itself.
-        verify(atc3HistorySync, times(1)).tbrStopped(any(), any(), anyOrNull())
+        verify(atc3HistorySync, times(1)).tbrStopped(any())
     }
 
     @Test
@@ -521,7 +523,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         verify(atc3Manager, times(1)).setSuspended(true)
         // The status read is what carries the stop into the insulin on board as a zero temporary
         // basal, rather than waiting for the next poll to notice.
-        verify(atc3HistorySync, times(1)).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+        verify(atc3HistorySync, times(1)).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
     }
 
     @Test
@@ -682,6 +684,15 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         plugin.getPumpStatus("test")
 
         verify(atc3Manager, times(1)).readStatus()
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
+    }
+
+    @Test
+    fun `the loop does not run while the pump allows extended and dual boluses`() = runTest {
+        pumpState.editStatus(settings = settingsWith(maxBasal = 5.0, maxBolus = 12.0).copy(extendedBolusAllowed = true))
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
+
+        pumpState.editStatus(settings = settingsWith(maxBasal = 5.0, maxBolus = 12.0))
         assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
     }
 
@@ -905,8 +916,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     // The barrier: a command that changes delivery reads the pump's boluses first
 
     @Test
-    fun `a temporary basal reads the pump's boluses when the driver's knowledge is stale`() = runTest {
-        whenever(atc3HistorySync.historyFresh(now)).thenReturn(false)
+    fun `a temporary basal reads the pump's boluses first`() = runTest {
         whenever(atc3Manager.setTempBasal(any(), any())).thenReturn(
             app.aaps.pump.atc3.command.Atc3TbrResult(now, 1.0, 30, "not the point of this test")
         )
@@ -918,22 +928,22 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a temporary basal does not read them again when they were just read`() = runTest {
-        whenever(atc3HistorySync.historyFresh(now)).thenReturn(true)
+    fun `a temporary basal reads them again however recently they were read`() = runTest {
+        // A bolus given on the pump between two commands has to reach AAPS before the second.
         whenever(atc3Manager.setTempBasal(any(), any())).thenReturn(
             app.aaps.pump.atc3.command.Atc3TbrResult(now, 1.0, 30, "not the point of this test")
         )
 
         plugin.setTempBasalAbsolute(1.0, 30, validProfile, false, tbrTypeNormal)
+        plugin.setTempBasalAbsolute(1.0, 30, validProfile, false, tbrTypeNormal)
 
-        verify(atc3Manager, never()).readBolusHistory()
+        verify(atc3Manager, times(2)).readBolusHistory()
     }
 
     @Test
     fun `cancelling a temporary basal reads them too`() = runTest {
         // The status comes first: without one there is nothing to compare and no command goes
         // out at all; with one, and no comparison possible yet, the history is the barrier.
-        whenever(atc3HistorySync.historyFresh(now)).thenReturn(false)
         whenever(atc3Manager.readStatus()).thenAnswer { pumpState.currentCard() }
 
         plugin.cancelTempBasal(false)
@@ -943,7 +953,6 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
     @Test
     fun `writing the basal profile reads them too`() = runTest {
-        whenever(atc3HistorySync.historyFresh(now)).thenReturn(false)
         whenever(atc3Manager.writeBasalProfile(any(), any())).thenReturn("not the point of this test")
 
         plugin.setNewBasalProfile(validProfile)
@@ -1022,7 +1031,6 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         // would let that count as having looked at the pump. Nothing would have looked at the
         // temporary basal or the suspension, so the busier the loop was, the longer a temporary
         // basal started on the keypad would stay invisible.
-        whenever(atc3HistorySync.historyFresh(now)).thenReturn(true)
         stateAge(5)
         startPlugin()
 
@@ -1037,10 +1045,9 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     /** Drive a bolus to its end with the pump recording [recorded] units. */
     private suspend fun deliver(requested: Double, recorded: Double, cancelled: Boolean = false): PumpEnactResult {
         whenever(bolusDelivery.bolus(any(), any(), any()))
-            .thenReturn(Atc3BolusOutcome.Delivered(recorded, cancelled = cancelled))
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(emptyHistory)
+            .thenReturn(Atc3BolusOutcome.Delivered(recorded, cancelled = cancelled, acceptedAtMs = now))
         whenever(atc3HistorySync.reconcileBoluses(any(), any()))
-            .thenReturn(Atc3HistorySync.ReconcileResult(confirmedUnits = recorded))
+            .thenReturn(Atc3HistorySync.ReconcileResult(confirmed = mapOf(now to recorded)))
         return plugin.deliverTreatment(manualBolus(requested, lastKnownBolusTime = 0L))
     }
 
@@ -1080,22 +1087,21 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         // The pump was asked and holds no record, so the progress frames are all there is. Stalling
         // at nothing must not pass as done just because the record is not there yet.
         whenever(bolusDelivery.bolus(any(), any(), any()))
-            .thenReturn(Atc3BolusOutcome.Delivered(0.0))
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(emptyHistory)
-        whenever(atc3HistorySync.reconcileBoluses(any(), any()))
-            .thenReturn(Atc3HistorySync.ReconcileResult(confirmedUnits = null))
+            .thenReturn(Atc3BolusOutcome.Delivered(0.0, acceptedAtMs = now))
 
         val result = plugin.deliverTreatment(manualBolus(2.0, lastKnownBolusTime = 0L))
 
         assertThat(result.success).isFalse()
         assertThat(result.bolusDelivered).isEqualTo(0.0)
+        // Asked as many times as the record may take to appear, after the read before the bolus.
+        verify(atc3Manager, times(Atc3Const.BOLUS_RECORD_POLL_ATTEMPTS + 1)).readBolusHistory()
     }
 
     @Test
     fun `a full bolus the pump has not recorded yet is still a success`() = runTest {
         whenever(bolusDelivery.bolus(any(), any(), any()))
-            .thenReturn(Atc3BolusOutcome.Delivered(2.0))
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(null)
+            .thenReturn(Atc3BolusOutcome.Delivered(2.0, acceptedAtMs = now))
+        whenever(atc3Manager.readBolusHistory()).thenReturn(null)
 
         val result = plugin.deliverTreatment(manualBolus(2.0, lastKnownBolusTime = 0L))
 
@@ -1104,32 +1110,19 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a bolus the pump could not be asked about is answered as delivered, at what was asked for`() = runTest {
-        // No history could be read: the link cut the watching short, and the pump goes on
-        // delivering what it accepted. The row counts what was asked for; the record corrects it.
-        whenever(rh.gs(R.string.atc3_bolus_unconfirmed)).thenReturn("unconfirmed")
+    fun `a bolus the pump could not be asked about is judged on what it reported while running`() = runTest {
+        // No history could be read: the link cut the watching short. What went in is said as seen;
+        // the row comes from the record on the next connection, whatever the pump went on to deliver.
+        whenever(rh.gs(eq(R.string.atc3_bolus_short), anyOrNull(), anyOrNull())).thenReturn("short")
         whenever(bolusDelivery.bolus(any(), any(), any()))
-            .thenReturn(Atc3BolusOutcome.Delivered(0.4))
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(null)
+            .thenReturn(Atc3BolusOutcome.Delivered(0.4, acceptedAtMs = now))
+        whenever(atc3Manager.readBolusHistory()).thenReturn(null)
 
         val result = plugin.deliverTreatment(manualBolus(1.0, lastKnownBolusTime = 0L))
 
-        assertThat(result.success).isTrue()
-        assertThat(result.bolusDelivered).isEqualTo(1.0)
-        assertThat(result.comment).isEqualTo("unconfirmed")
-        verify(atc3HistorySync).answeredWhole(any())
-    }
-
-    @Test
-    fun `a bolus the user stopped is not made whole by the link going after it`() = runTest {
-        whenever(bolusDelivery.bolus(any(), any(), any()))
-            .thenReturn(Atc3BolusOutcome.Delivered(0.4, cancelled = true))
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(null)
-
-        val result = plugin.deliverTreatment(manualBolus(1.0, lastKnownBolusTime = 0L))
-
+        assertThat(result.success).isFalse()
         assertThat(result.bolusDelivered).isEqualTo(0.4)
-        verify(atc3HistorySync, never()).answeredWhole(any())
+        assertThat(result.comment).isEqualTo("short")
     }
 
     @Test
@@ -1139,10 +1132,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         whenever(rh.gs(R.string.atc3_bolus_unconfirmed)).thenReturn("unconfirmed")
         whenever(rh.gs(eq(R.string.atc3_bolus_short), anyOrNull(), anyOrNull())).thenReturn("short")
         whenever(bolusDelivery.bolus(any(), any(), any()))
-            .thenReturn(Atc3BolusOutcome.Delivered(0.4))
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(emptyHistory)
-        whenever(atc3HistorySync.reconcileBoluses(any(), any()))
-            .thenReturn(Atc3HistorySync.ReconcileResult(confirmedUnits = null))
+            .thenReturn(Atc3BolusOutcome.Delivered(0.4, acceptedAtMs = now))
 
         val result = plugin.deliverTreatment(manualBolus(1.0, lastKnownBolusTime = 0L))
 
@@ -1150,9 +1140,9 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         assertThat(result.comment).isEqualTo("short")
     }
 
-    // A bolus the pump closes with its completion frame, see Atc3PumpPlugin.deliverTreatmentInner
+    // A bolus of ours: expected from the pump's acceptance, written from the pump's record
 
-    /** Drive a bolus the pump accepts at [acceptedAt] and ends as [outcome]. */
+    /** Drive a bolus the pump accepts at [acceptedAt] and ends as [outcome], its record saying the same. */
     private suspend fun deliverAccepted(
         requested: Double,
         outcome: Atc3BolusOutcome.Delivered,
@@ -1164,65 +1154,57 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
             runBlocking { onAccepted(acceptedAt) }
             outcome
         }
-        whenever(atc3HistorySync.registerPending(any(), any(), any())).thenReturn(42L)
-        whenever(atc3HistorySync.settleCompleted(any(), any())).thenReturn(true)
-        whenever(atc3Manager.readBolusHistoryUntil(any(), any())).thenReturn(emptyHistory)
         whenever(atc3HistorySync.reconcileBoluses(any(), any()))
-            .thenReturn(Atc3HistorySync.ReconcileResult(confirmedUnits = outcome.reportedUnits))
+            .thenReturn(Atc3HistorySync.ReconcileResult(confirmed = mapOf(acceptedAt to outcome.reportedUnits)))
         return plugin.deliverTreatment(manualBolus(requested, lastKnownBolusTime = 0L))
     }
 
     @Test
-    fun `a bolus closed by its completion frame after progress is settled, and its record read at once`() = runTest {
-        // The row is dated by the pump's record here, once, not at a later read.
-        val result = deliverAccepted(
-            2.0,
-            Atc3BolusOutcome.Delivered(2.0, completed = true, sawProgress = true, acceptedAtMs = now)
-        )
+    fun `a bolus is expected when the pump accepts it, and its record is read at once`() = runTest {
+        // No row of our own: the row comes from the pump's record, read right after the bolus.
+        val result = deliverAccepted(2.0, Atc3BolusOutcome.Delivered(2.0, completed = true, acceptedAtMs = now))
 
         assertThat(result.success).isTrue()
         assertThat(result.bolusDelivered).isEqualTo(2.0)
-        val order = inOrder(atc3HistorySync, atc3Manager, bolusDelivery)
-        order.verify(atc3HistorySync, times(1)).settleCompleted(eq(42L), eq(2.0))
-        order.verify(atc3Manager, times(1)).readBolusHistoryUntil(any(), any())
+        val order = inOrder(atc3HistorySync, atc3Manager)
+        order.verify(atc3HistorySync, times(1)).expect(eq(now), eq(2.0), eq(BS.Type.NORMAL))
+        order.verify(atc3Manager, times(1)).readBolusHistory()
         order.verify(atc3HistorySync, times(1)).reconcileBoluses(any(), any())
     }
 
     @Test
-    fun `a bolus with no completion frame goes to the history for what went in`() = runTest {
-        // Cut short, by a cancel, an alarm or the link: the pump's record says how much.
-        val result = deliverAccepted(
-            2.0,
-            Atc3BolusOutcome.Delivered(0.5, completed = false, sawProgress = true, acceptedAtMs = now)
-        )
+    fun `a bolus cut short is judged by what its record says went in`() = runTest {
+        val result = deliverAccepted(2.0, Atc3BolusOutcome.Delivered(0.5, completed = false, acceptedAtMs = now))
 
-        verify(atc3HistorySync, never()).settleCompleted(any(), any())
-        verify(atc3Manager, times(1)).readBolusHistoryUntil(any(), any())
+        assertThat(result.success).isFalse()
         assertThat(result.bolusDelivered).isEqualTo(0.5)
     }
 
     @Test
-    fun `a completion frame without any progress before it still goes to the history`() = runTest {
-        deliverAccepted(0.05, Atc3BolusOutcome.Delivered(0.05, completed = true, sawProgress = false, acceptedAtMs = now))
+    fun `two boluses may follow each other at once`() = runTest {
+        // Nothing holds the second one back: the minute tells its record from the first one's.
+        deliverAccepted(1.0, Atc3BolusOutcome.Delivered(1.0, completed = true, acceptedAtMs = now))
+        deliverAccepted(1.0, Atc3BolusOutcome.Delivered(1.0, completed = true, acceptedAtMs = now))
 
-        verify(atc3HistorySync, never()).settleCompleted(any(), any())
-        verify(atc3Manager, times(1)).readBolusHistoryUntil(any(), any())
-    }
-
-    @Test
-    fun `the next bolus is held a minute from the start of the previous one`() = runTest {
-        deliverAccepted(1.0, Atc3BolusOutcome.Delivered(1.0, completed = true, sawProgress = true, acceptedAtMs = now))
-
-        // Asked for at once: the previous one started this very moment, so this one is held. The
-        // stop button ends the hold, and the bolus never reaches the pump.
-        BolusProgressData.stopPressed = true
-        val second = plugin.deliverTreatment(manualBolus(1.0, lastKnownBolusTime = 0L))
-
-        assertThat(second.success).isFalse()
-        verify(bolusDelivery, times(1)).bolus(any(), any(), any())
+        verify(bolusDelivery, times(2)).bolus(any(), any(), any())
     }
 
     // Refusing a microbolus decided without knowing about insulin somebody else gave
+
+    @Test
+    fun `a microbolus decided before a bolus a tick imported is refused too`() = runTest {
+        pumpAnswersWithCount(10.0)
+        // The tick's read of the journal finds the bolus; the read in front of the microbolus finds nothing new.
+        whenever(atc3HistorySync.reconcileBoluses(any(), any()))
+            .thenReturn(Atc3HistorySync.ReconcileResult(newestImportedAtMs = now - 60_000L, importedUnits = 1.0))
+            .thenReturn(Atc3HistorySync.ReconcileResult())
+        plugin.getPumpStatus("test")
+
+        val result = plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = now - 120_000L))
+
+        assertThat(result.success).isFalse()
+        verify(bolusDelivery, never()).bolus(any(), any(), any())
+    }
 
     @Test
     fun `a microbolus is refused when a bolus reached us after the loop decided`() = runTest {
@@ -1238,17 +1220,17 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a microbolus is delivered when the imported bolus is older than the decision`() = runTest {
-        // The first comparison after a start: nothing to compare against, the journals are read.
+    fun `a microbolus is refused when a bolus the loop did not know of turns up in front of it, however old`() = runTest {
+        // The first comparison after a start: nothing to compare against, the journal is read.
         pumpAnswersWithCount(10.0)
         whenever(atc3HistorySync.reconcileBoluses(any(), any())).thenReturn(
             Atc3HistorySync.ReconcileResult(newestImportedAtMs = now - 300_000L)
         )
-        whenever(bolusDelivery.bolus(any(), any(), any())).thenReturn(app.aaps.pump.atc3.command.Atc3BolusOutcome.NotSent)
 
-        plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = now - 120_000L))
+        val result = plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = now - 120_000L))
 
-        verify(bolusDelivery, times(1)).bolus(any(), any(), any())
+        assertThat(result.success).isFalse()
+        verify(bolusDelivery, never()).bolus(any(), any(), any())
     }
 
     @Test
@@ -1261,10 +1243,9 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         verify(bolusDelivery, times(1)).bolus(any(), any(), any())
     }
 
-    // Refusing a microbolus decided on data that did not stand, by the rule the loop's temporary
-    // basal is refused by. A microbolus is insulin given at once, and a count the journals cannot
-    // explain, or journals that cannot be read, are when the loop's insulin on board is known to
-    // be wrong and nobody knows by how much.
+    // What the pump's count says and the journal does not explain is the pump's own way of
+    // delivering: counted, and settled by the half hour. It refuses nothing. Only a bolus the loop
+    // did not know of, or a journal that cannot be read, refuses the loop's command.
 
     /**
      * The pump has counted [excess] more than the AAPS journal accounts for since the read before,
@@ -1275,43 +1256,65 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         runBlocking {
             whenever(aapsJournal.insulinBetween(any(), any(), any())).thenReturn(Atc3JournalArithmetic.Breakdown(0.0, 0.0, 0.0))
         }
-        // The first read has nothing to compare against and becomes the anchor.
+        // The first read begins the window the comparison counts from.
         plugin.getPumpStatus("test")
         pumpAnswersWithCount(10.0 + excess)
     }
 
     @Test
-    fun `a microbolus is refused when the pump counted insulin its journals do not explain`() = runTest {
+    fun `a microbolus goes through when the pump counted insulin its journal does not explain`() = runTest {
         pumpCountedMoreThanTheJournal(1.2)
+        whenever(bolusDelivery.bolus(any(), any(), any())).thenReturn(app.aaps.pump.atc3.command.Atc3BolusOutcome.NotSent)
 
-        val result = plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = now - 120_000L))
+        plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = now - 120_000L))
 
-        assertThat(result.success).isFalse()
-        assertThat(result.enacted).isFalse()
-        verify(bolusDelivery, never()).bolus(any(), any(), any())
-    }
-
-    /** The exact basal mode closes its half hours by the pump's count; the comparison before a command is the ordinary one. */
-    @Test
-    fun `the exact basal mode refuses a microbolus on an unexplained count like the ordinary one`() = runTest {
-        whenever(preferences.get(Atc3BooleanKey.ExactBasal)).thenReturn(true)
-        pumpCountedMoreThanTheJournal(1.2)
-
-        val result = plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = now - 120_000L))
-
-        assertThat(result.success).isFalse()
-        verify(bolusDelivery, never()).bolus(any(), any(), any())
+        verify(bolusDelivery, times(1)).bolus(any(), any(), any())
     }
 
     @Test
-    fun `the exact basal mode refuses the loop's temporary basal on an unexplained count like the ordinary one`() = runTest {
-        whenever(preferences.get(Atc3BooleanKey.ExactBasal)).thenReturn(true)
+    fun `the loop's temporary basal goes through when the pump counted insulin its journal does not explain`() = runTest {
         pumpCountedMoreThanTheJournal(1.2)
+        whenever(atc3Manager.setTempBasal(any(), any())).thenReturn(Atc3TbrResult(now, 1.0, 30, null))
+
+        val result = plugin.setTempBasalAbsolute(1.0, 30, validProfile, false, tbrTypeNormal)
+
+        assertThat(result.success).isTrue()
+        verify(atc3Manager, times(1)).setTempBasal(any(), any())
+    }
+
+    @Test
+    fun `the bolus journal is read in front of the loop's temporary basal whatever the count says`() = runTest {
+        pumpCountedMoreThanTheJournal(0.0)
+        whenever(atc3Manager.setTempBasal(any(), any())).thenReturn(Atc3TbrResult(now, 1.0, 30, null))
+        clearInvocations(atc3Manager)
+
+        plugin.setTempBasalAbsolute(1.0, 30, validProfile, false, tbrTypeNormal)
+
+        verify(atc3Manager, times(1)).readBolusHistory()
+    }
+
+    @Test
+    fun `the loop's temporary basal is refused when a bolus the loop did not know of turns up in front of it`() = runTest {
+        pumpCountedMoreThanTheJournal(0.0)
+        whenever(atc3HistorySync.reconcileBoluses(any(), any())).thenReturn(
+            Atc3HistorySync.ReconcileResult(newestImportedAtMs = now - 60_000L, importedUnits = 1.0)
+        )
 
         val result = plugin.setTempBasalAbsolute(1.0, 30, validProfile, false, tbrTypeNormal)
 
         assertThat(result.success).isFalse()
         verify(atc3Manager, never()).setTempBasal(any(), any())
+    }
+
+    @Test
+    fun `a difference the journal did not explain is not read for again on the next tick`() = runTest {
+        pumpCountedMoreThanTheJournal(1.2)
+        plugin.getPumpStatus("test")
+        clearInvocations(atc3Manager)
+
+        plugin.getPumpStatus("test")
+
+        verify(atc3Manager, never()).readBolusHistory()
     }
 
     @Test
@@ -1371,16 +1374,17 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     }
 
     @Test
-    fun `a microbolus with no decision stamp is delivered rather than guessed about`() = runTest {
+    fun `a microbolus with no decision stamp is still refused by a bolus found in front of it`() = runTest {
+        // The stamp only tells a bolus the loop knew from one it did not; a bolus imported now was unknown to it either way.
         pumpAnswersWithCount(10.0)
         whenever(atc3HistorySync.reconcileBoluses(any(), any())).thenReturn(
             Atc3HistorySync.ReconcileResult(newestImportedAtMs = now - 60_000L)
         )
-        whenever(bolusDelivery.bolus(any(), any(), any())).thenReturn(app.aaps.pump.atc3.command.Atc3BolusOutcome.NotSent)
 
-        plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = 0L))
+        val result = plugin.deliverTreatment(smb(0.5, lastKnownBolusTime = 0L))
 
-        verify(bolusDelivery, times(1)).bolus(any(), any(), any())
+        assertThat(result.success).isFalse()
+        verify(bolusDelivery, never()).bolus(any(), any(), any())
     }
 
     companion object {
@@ -1393,8 +1397,6 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     /** The pump now runs [rate] for [minutes], or none, whatever AAPS holds. */
     private fun pumpRunsByHand(rate: Double?, minutes: Int = 30) = runBlocking {
         whenever(atc3Manager.readStatus()).thenAnswer { pumpState.currentCard() }
-        whenever(atc3Manager.readTbrHistory()).thenReturn(emptyList())
-        whenever(atc3HistorySync.reconcileTbrHistory(any())).thenReturn(0)
         pumpState.editStatus { it.copy(tbrActive = rate != null) }
         pumpState.editStatus { it.copy(tbrRate = rate ?: 0.0) }
         pumpState.editStatus { it.copy(tbrDurationMinutes = if (rate != null) minutes else 0) }
@@ -1415,7 +1417,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
         verify(atc3Manager, never()).setTempBasal(any(), any())
         verify(atc3Manager, never()).cancelTempBasal()
-        verify(atc3HistorySync, atLeastOnce()).onStatus(eq(false), eq(true), eq(3.0), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+        verify(atc3HistorySync, atLeastOnce()).onStatus(eq(false), eq(true), eq(3.0), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
     }
 
     @Test
@@ -1425,12 +1427,12 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         plugin.getPumpStatus("test")
 
         verify(atc3Manager, never()).setTempBasal(any(), any())
-        verify(atc3HistorySync, atLeastOnce()).onStatus(eq(false), eq(false), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+        verify(atc3HistorySync, atLeastOnce()).onStatus(eq(false), eq(false), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
     }
 
     /**
      * The verdict is taken before anything of the read is written: what the pump did on its own
-     * since the anchor is measured against the journal the loop decided on. Written first, a
+     * since the window began is measured against the journal the loop decided on. Written first, a
      * temporary basal set by hand would already be in the journal by the time it is compared,
      * and the comparison would never see it.
      */
@@ -1443,7 +1445,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
         val order = inOrder(aapsJournal, atc3HistorySync)
         order.verify(aapsJournal).insulinBetween(any(), any(), any())
-        order.verify(atc3HistorySync).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+        order.verify(atc3HistorySync).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
     }
 
     @Test
@@ -1456,7 +1458,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
         val order = inOrder(aapsJournal, atc3HistorySync)
         order.verify(aapsJournal).insulinBetween(any(), any(), any())
-        order.verify(atc3HistorySync).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+        order.verify(atc3HistorySync).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
     }
 
     @Test
@@ -1469,7 +1471,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
         val order = inOrder(aapsJournal, atc3HistorySync)
         order.verify(aapsJournal).insulinBetween(any(), any(), any())
-        order.verify(atc3HistorySync).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+        order.verify(atc3HistorySync).onStatus(any(), any(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
     }
 
     @Test
@@ -1527,11 +1529,6 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
     private fun pumpAnswersWithCount(counter: Double) {
         pumpState.editStatus(readAtMs = now) { it.copy(snapshotTime = now, deliveredTodayUnits = counter) }
         whenever(atc3Manager.readStatus()).thenAnswer { pumpState.currentCard() }
-        whenever(atc3Manager.readTbrHistory()).thenReturn(emptyList())
-        runBlocking {
-            whenever(aapsJournal.rowsBetween(any(), any())).thenReturn(emptyList())
-            whenever(basalFact.writeBasalFact(any(), any(), any(), any(), anyOrNull(), any())).thenReturn(true)
-        }
     }
 
     /** A paired pump whose last status read was this long ago, with that answer on disk as a tick leaves it. */
@@ -1540,7 +1537,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("A1B2C3")
         val answered = now - minutes * 60_000L
         pumpState.lastConnection = answered
-        whenever(preferences.get(Atc3StringNonKey.LastAnswer)).thenReturn(Atc3LinkWatch.Stop(answered, 10.0).encode())
+        store.update { it.copy(lastAnswer = Atc3LinkWatch.Stop(answered, 10.0)) }
     }
 
     @Test
@@ -1561,7 +1558,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
         linkKeeper.checkLink()
 
         verify(uiInteraction, times(1)).addNotificationWithSound(eq(Notification.PUMP_UNREACHABLE), any(), eq(Notification.URGENT), anyOrNull())
-        verify(preferences, never()).put(eq(Atc3StringNonKey.LinkStop), any<String>())
+        assertThat(store.state.linkStop).isNull()
         verify(atc3HistorySync, never()).recordLinkStop(any(), any())
         assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
     }
@@ -1573,7 +1570,7 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
         linkKeeper.checkLink()
 
-        verify(preferences).put(Atc3StringNonKey.LinkStop, Atc3LinkWatch.Stop(answered, 10.0).encode())
+        assertThat(store.state.linkStop).isEqualTo(Atc3LinkWatch.Stop(answered, 10.0))
         // No basal from the last answer on, as far as the next telling.
         verify(atc3HistorySync).recordLinkStop(answered, 31 * 60_000L + Atc3LinkWatch.ALARM_AFTER_MS)
         verify(uiInteraction, times(1)).addNotificationWithSound(eq(Notification.PUMP_UNREACHABLE), any(), eq(Notification.URGENT), anyOrNull())
@@ -1591,50 +1588,24 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
     @Test
     fun `a pump held stopped for want of an answer stops the loop`() = runTest {
-        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(lastAnswer(), 10.0).encode())
+        store.update { it.copy(linkStop = Atc3LinkWatch.Stop(lastAnswer(), 10.0)) }
 
         assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
     }
 
     @Test
-    fun `the answer that ends the stop writes the silence by the pump's count and lets the loop go on`() = runTest {
+    fun `the answer that ends the stop closes its row at the answer, writes nothing else, and lets the loop go on`() = runTest {
         val from = lastAnswer()
-        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(from, 10.0).encode())
-        // The count went on by 3 U, and a bolus of 1 U was given on the pump meanwhile.
+        store.update { it.copy(linkStop = Atc3LinkWatch.Stop(from, 10.0)) }
+        // The count went on by 3 U: that shows in the window, not in the rows.
         pumpAnswersWithCount(13.0)
-        whenever(atc3HistorySync.bolusesLearnedAfter(from)).thenReturn(1.0)
 
         plugin.getPumpStatus("test")
 
         verify(atc3HistorySync).recordLinkStop(from, now - from)
-        verify(basalFact).writeBasalFact(eq(from), eq(now), eq(2.0), any(), anyOrNull(), eq(0))
-        verify(preferences).put(Atc3StringNonKey.LinkStop, "")
+        verify(atc3HistorySync, never()).tbrStartedByAaps(any(), any(), any(), anyOrNull(), any())
+        assertThat(store.state.linkStop).isNull()
         assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
-    }
-
-    @Test
-    fun `a count that began anew writes the silence as no basal and says so`() = runTest {
-        val from = lastAnswer()
-        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(from, 13.6).encode())
-        pumpAnswersWithCount(0.0)
-
-        plugin.getPumpStatus("test")
-
-        verify(basalFact).writeBasalFact(eq(from), eq(now), eq(0.0), any(), anyOrNull(), eq(0))
-        verify(uiInteraction).addNotification(eq(Notification.WRONG_PUMP_DATA), any(), eq(Notification.NORMAL))
-    }
-
-    @Test
-    fun `a stretch that cannot be written yet leaves the stop standing`() = runTest {
-        val from = lastAnswer()
-        whenever(preferences.get(Atc3StringNonKey.LinkStop)).thenReturn(Atc3LinkWatch.Stop(from, 10.0).encode())
-        pumpAnswersWithCount(13.0)
-        runBlocking { whenever(basalFact.writeBasalFact(any(), any(), any(), any(), anyOrNull(), any())).thenReturn(false) }
-
-        plugin.getPumpStatus("test")
-
-        verify(preferences, never()).put(Atc3StringNonKey.LinkStop, "")
-        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
     }
 
     @Test
@@ -1643,6 +1614,60 @@ class Atc3PumpPluginTest : TestBaseWithProfile() {
 
         plugin.getPumpStatus("test")
 
-        verify(preferences).put(Atc3StringNonKey.LastAnswer, Atc3LinkWatch.Stop(now, 13.0).encode())
+        assertThat(store.state.lastAnswer).isEqualTo(Atc3LinkWatch.Stop(now, 13.0))
+    }
+
+    // A pump that owes insulin and does not count any
+
+    /** The status read [tick] ticks of five minutes after [now], with the count standing at [counter]. */
+    private fun pumpCounts(tick: Int, counter: Double) {
+        val readAt = now + tick * 300_000L
+        pumpState.editStatus(readAtMs = readAt) { it.copy(snapshotTime = readAt, deliveredTodayUnits = counter) }
+        whenever(atc3Manager.readStatus()).thenAnswer { pumpState.currentCard() }
+    }
+
+    /** The journal owes 1 U/h over any interval it is asked about. */
+    private fun journalOwesOneUnitAnHour() = runBlocking {
+        whenever(aapsJournal.insulinBetween(any(), any(), any())).thenAnswer {
+            val from = it.getArgument<Long>(0)
+            val to = it.getArgument<Long>(1)
+            Atc3JournalArithmetic.Breakdown(0.0, 0.0, (to - from) / 3_600_000.0)
+        }
+    }
+
+    @Test
+    fun `a count that stands still while insulin is owed is told at two ticks and stops the loop at three`() = runTest {
+        journalOwesOneUnitAnHour()
+        pumpCounts(0, 10.0)
+        plugin.getPumpStatus("test")
+        pumpCounts(1, 10.0)
+        plugin.getPumpStatus("test")
+        verify(uiInteraction, never()).addNotification(eq(Notification.PUMP_ERROR), any(), eq(Notification.URGENT))
+
+        pumpCounts(2, 10.0)
+        plugin.getPumpStatus("test")
+
+        verify(uiInteraction, times(1)).addNotification(eq(Notification.PUMP_ERROR), any(), eq(Notification.URGENT))
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
+
+        pumpCounts(3, 10.0)
+        plugin.getPumpStatus("test")
+
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
+    }
+
+    @Test
+    fun `the count moving again lets the loop go on`() = runTest {
+        journalOwesOneUnitAnHour()
+        for (tick in 0..3) {
+            pumpCounts(tick, 10.0)
+            plugin.getPumpStatus("test")
+        }
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isFalse()
+
+        pumpCounts(4, 10.1)
+        plugin.getPumpStatus("test")
+
+        assertThat(plugin.isLoopInvocationAllowed(ConstraintObject(true, aapsLogger)).value()).isTrue()
     }
 }

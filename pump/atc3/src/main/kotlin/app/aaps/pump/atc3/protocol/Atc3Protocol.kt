@@ -107,6 +107,9 @@ object Atc3Protocol {
     /** One raw unit of a dose, U, or of a rate, U/h. */
     const val DOSE_SCALE = 0.025
 
+    /** Well under one raw unit: two counts are apart only when they are so by more than this. */
+    const val COUNT_EPSILON = 1e-6
+
     /** One raw unit of the reservoir, U. */
     const val RESERVOIR_SCALE = 0.001
 

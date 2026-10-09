@@ -5,16 +5,15 @@ import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
-import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.atc3.R
 import app.aaps.pump.atc3.check.Atc3AapsJournal
+import app.aaps.pump.atc3.check.Atc3Reconciliation
 import app.aaps.pump.atc3.clock.Atc3DayClock
 import app.aaps.pump.atc3.history.Atc3HistorySync
-import app.aaps.pump.atc3.keys.Atc3BooleanKey
-import app.aaps.pump.atc3.keys.Atc3StringNonKey
 import app.aaps.pump.atc3.manager.Atc3Manager
-import app.aaps.pump.atc3.protocol.Atc3BolusHistory
+import app.aaps.pump.atc3.protocol.Atc3Protocol
 import app.aaps.pump.atc3.state.Atc3PumpState
+import app.aaps.pump.atc3.store.Atc3Store
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.pump.atc3.trace.Atc3TraceCat
 import kotlinx.coroutines.CoroutineScope
@@ -26,37 +25,43 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * The exact basal mode: the half hour that has passed, closed by the pump's count, see
- * [Atc3BasalPeriod]. One of two ways of laying the basal out in AAPS; what the pump delivered is the
- * same either way. Asked once per tick, after the comparison; the period is kept on disk, see
- * [Atc3StringNonKey.BasalPeriod].
+ * Keeps the window of the basal account, see [Atc3BasalPeriod]: begins it where there is nothing to
+ * close from, closes it at the half hour by the pump's count, and hands what it found to
+ * [Atc3BasalSpread]. The window is kept on disk, see [Atc3Store]. Asked twice a tick: before the
+ * comparison, for a beginning, and after it, for a close.
  */
 @Singleton
 class Atc3BasalPeriodKeeper @Inject constructor(
     private val aapsLogger: AAPSLogger,
     private val rh: ResourceHelper,
-    private val preferences: Preferences,
+    private val store: Atc3Store,
     private val dateUtil: DateUtil,
     private val commandQueue: CommandQueue,
     private val pumpState: Atc3PumpState,
     private val atc3Manager: Atc3Manager,
     private val atc3HistorySync: Atc3HistorySync,
     private val aapsJournal: Atc3AapsJournal,
+    private val reconciliation: Atc3Reconciliation,
     private val trace: Atc3Trace,
-    private val basalFact: Atc3BasalFact
+    private val spread: Atc3BasalSpread
 ) {
 
-    /** The read asked for at every half hour in the exact basal mode, see [watch]. */
+    /** The read asked for at every half hour, see [watch]. */
     private var halfHourWatch: Job? = null
 
-    /** Ask for a status a little past every half hour, the read a period is closed at; only while the mode is on. */
+    /** True from a close until a tick has read the bolus journal after it: a bolus that ran across the end has its record only then. */
+    private var journalWantedAfterClose = false
+
+    /** True from a refill until the window has begun anew: the count may hold the priming. */
+    private var refilled = false
+
+    /** Ask for a status a little past every half hour: the read a window is closed at. */
     fun watch(scope: CoroutineScope, enabled: () -> Boolean) {
         if (halfHourWatch?.isActive == true) return
         halfHourWatch = scope.launch {
             while (isActive) {
                 delay(Atc3BasalPeriod.msToNextRead(dateUtil.now()))
-                if (enabled() && preferences.get(Atc3BooleanKey.ExactBasal))
-                    commandQueue.readStatus(rh.gs(R.string.atc3_half_hour_read), null)
+                if (enabled()) commandQueue.readStatus(rh.gs(R.string.atc3_half_hour_read), null)
             }
         }
     }
@@ -66,98 +71,116 @@ class Atc3BasalPeriodKeeper @Inject constructor(
         halfHourWatch = null
     }
 
-    /**
-     * Close the half hour that has passed by the pump's count, and look once more at the one closed
-     * before it, see [Atc3BasalPeriod].
-     *
-     * @param journalRead true when this tick already took in the bolus journal
-     * @param readHistory the driver's read of the bolus history
-     * @param anchor takes this read as the comparison's anchor: once the period is closed, the journal is the pump's count up to it
-     */
-    suspend fun closeIfDue(journalRead: Boolean, readHistory: () -> Atc3BolusHistory?, anchor: (Atc3PumpState.StatusCard) -> Unit) {
-        val stored: String = (preferences.get(Atc3StringNonKey.BasalPeriod) as String?).orEmpty()
-        if (!preferences.get(Atc3BooleanKey.ExactBasal)) {
-            if (stored.isNotEmpty()) preferences.put(Atc3StringNonKey.BasalPeriod, "")
-            return
-        }
-        val card = pumpState.statusCard ?: return
-        val status = card.status
-        val readMs = card.readAtMs
-        val state = Atc3BasalPeriod.State.decode(stored)
-        // The mode has just been switched on: the first period begins at this read.
-        val start = state.start ?: return begin(card, state.closed, "mode_on")
-        val closed = state.closed
-        // The count began anew within the day: there is no count to close from, the rows stay.
-        if (Atc3DayClock.sameDay(start.readMs, readMs) && status.deliveredTodayUnits + COUNT_EPSILON < start.counterUnits)
-            return begin(card, closed, "count_reset")
-        // A read can be the cycle after a close, or the end of the period under way; most are neither.
-        val lookAgain = closed != null && !closed.checked && readMs > closed.endReadMs
-        val due = Atc3BasalPeriod.isDue(start.readMs, readMs)
-        if (!lookAgain && !due) return
-
-        // Either way, boluses first.
-        if (!journalRead) {
-            val history = readHistory()
-            if (history == null) {
-                trace.event(Atc3TraceCat.HIST, "period", "state" to "postponed", "why" to "no_journal")
-                return
-            }
-            atc3HistorySync.reconcileBoluses(history.records, history.recordCount)
-        }
-        if (lookAgain) {
-            // A bolus that ran across its end: the period is closed again, up to this read.
-            if (atc3HistorySync.bolusStraddles(closed.closedAtMs, closed.endReadMs)) return closePeriod(card, closed.start, closed, anchor)
-            preferences.put(Atc3StringNonKey.BasalPeriod, state.copy(closed = closed.copy(checked = true)).encode())
-        }
-        if (due) closePeriod(card, start, closed, anchor)
+    /** A refill was seen: the window begins anew at the next read. */
+    fun noteRefill() {
+        refilled = true
     }
 
     /**
-     * Close the period from [from] to this read: its boluses out of the count, the rest written as basal.
+     * Begin the window at this read when there is nothing to close from: the first read, a refill, a
+     * count begun anew within the day. The rows stay as they are. Asked before the comparison, which
+     * counts from the window's start.
      *
-     * @param before the period closed last; when it began at [from] too, it is being closed again
+     * @return true when the window began at this read: the bolus journal is then read, as the count can say nothing yet
      */
-    private suspend fun closePeriod(card: Atc3PumpState.StatusCard, from: Atc3BasalPeriod.Mark, before: Atc3BasalPeriod.Closed?, anchor: (Atc3PumpState.StatusCard) -> Unit) {
+    fun beginIfNeeded(card: Atc3PumpState.StatusCard): Boolean {
+        val state = store.state.basalPeriod
+        val start = state.start
+        val why = when {
+            start == null -> "first"
+            refilled      -> "refill"
+
+            Atc3DayClock.sameDay(start.readMs, card.readAtMs) && card.deliveredTodayUnits + Atc3Protocol.COUNT_EPSILON < start.counterUnits ->
+                "count_reset"
+
+            else          -> return false
+        }
+        refilled = false
+        begin(card, state.closed, why)
+        return true
+    }
+
+    /**
+     * Close the window that has passed by the pump's count, and the one closed before it once more when
+     * a bolus ran across its end, see [Atc3BasalPeriod].
+     *
+     * @param journalRead true when this tick already took in the bolus journal
+     */
+    suspend fun closeIfDue(journalRead: Boolean) {
+        val card = pumpState.statusCard ?: return
+        val readMs = card.readAtMs
+        val state = store.state.basalPeriod
+        val start = state.start ?: return
+        val due = Atc3BasalPeriod.isDue(start.readMs, readMs)
+        // Boluses first: at the boundary, and once after a close.
+        var takenIn = journalRead
+        if ((due || journalWantedAfterClose) && !takenIn) {
+            if (reconciliation.readBoluses() == null) {
+                trace.event(Atc3TraceCat.HIST, "period", "state" to "postponed", "why" to "no_journal")
+                return
+            }
+            takenIn = true
+        }
+        if (takenIn) {
+            journalWantedAfterClose = false
+            val closed = state.closed
+            // A bolus learned since the close that began by its end: the window is closed again, up to this read.
+            if (closed != null && atc3HistorySync.bolusStraddles(closed.closedAtMs, closed.endReadMs)) {
+                return closePeriod(card, closed.start, again = true)
+            }
+            // A bolus learned since the window began that had begun by its first read is partly in the
+            // count there: the window begins anew at this read, its figure being no good.
+            if (atc3HistorySync.bolusStraddles(start.learnedAfterMs, start.readMs)) return begin(card, closed, "bolus_straddles")
+        }
+        if (due) closePeriod(card, start, again = false)
+    }
+
+    /**
+     * Close the window from [from] to this read: its boluses out of the count, the rest is its basal.
+     * The figures go to the trace and to [Atc3BasalSpread]; the rows are not touched here.
+     *
+     * @param again true when the window was closed before and is closed again: closed at this read whatever it is
+     */
+    private suspend fun closePeriod(card: Atc3PumpState.StatusCard, from: Atc3BasalPeriod.Mark, again: Boolean) {
         val readMs = card.readAtMs
         val counter = card.deliveredTodayUnits
-        val again = before?.takeIf { it.start == from }
         val bolus = atc3HistorySync.bolusesLearnedAfter(from.learnedAfterMs)
         val step = Atc3BasalPeriod.step(
             from, readMs, counter, bolus,
-            settled = !atc3HistorySync.hasPendingBolus(),
+            settled = !atc3HistorySync.hasExpectedBolus(),
             dayTotalUnits = if (Atc3BasalPeriod.dayChanged(from.readMs, readMs)) dayTotalOf(from.readMs) else null,
-            force = again != null
+            force = again
         )
         when (step) {
             is Atc3BasalPeriod.Step.Close    -> {
-                // The length the running temporary basal was started for: its row goes on to the pump's end.
-                val pumpTbrDurationMs =
-                    if (card.tbrActive && !card.notDelivering) card.tbrDurationMinutes.takeIf { it > 0 }?.let { it * 60_000L } else null
-                val rows = aapsJournal.rowsBetween(from.readMs, readMs)
-                val writes = again?.writes ?: 0
-                if (!basalFact.writeBasalFact(from.readMs, readMs, step.units, rows, pumpTbrDurationMs, write = writes)) return
+                // What the rows order over the window, basal only; null while no profile runs.
+                val ordered = aapsJournal.insulinBetween(from.readMs, readMs, bolus)?.let { it.temporaryBasalUnits + it.scheduledUnits }
+                val window = Atc3BasalPeriod.Window(from.readMs, readMs, step.countedUnits, bolus, step.units, ordered, again)
                 val now = dateUtil.now()
-                preferences.put(
-                    Atc3StringNonKey.BasalPeriod,
-                    Atc3BasalPeriod.State(
-                        Atc3BasalPeriod.Mark(readMs, counter, now),
-                        Atc3BasalPeriod.Closed(from, readMs, now, writes + 1, checked = false)
-                    ).encode()
+                store.update {
+                    it.copy(basalPeriod = Atc3BasalPeriod.State(Atc3BasalPeriod.Mark(readMs, counter, now), Atc3BasalPeriod.Closed(from, readMs, now)))
+                }
+                atc3HistorySync.pruneLearned()
+                journalWantedAfterClose = true
+                aapsLogger.debug(
+                    LTag.PUMP,
+                    "ATC3: window from ${from.readMs} to $readMs: ${step.units} U of basal by the pump's count, ${ordered ?: "?"} U ordered"
                 )
                 trace.event(
-                    Atc3TraceCat.HIST, "period", "state" to "closed", "again" to (again != null),
-                    "from" to from.readMs, "to" to readMs, "bolus" to bolus, "basal" to step.units
+                    Atc3TraceCat.HIST, "window",
+                    "from" to from.readMs, "to" to readMs, "s" to (readMs - from.readMs) / 1000, "again" to again,
+                    "pump" to step.countedUnits, "bolus" to bolus, "basal" to step.units,
+                    "ordered" to ordered, "diff" to window.differenceUnits
                 )
-                // The journal is the pump's count up to here; the comparison goes on from this read.
-                anchor(card)
+                spread.settle(window)
             }
 
             is Atc3BasalPeriod.Step.Postpone -> {
-                aapsLogger.debug(LTag.PUMP, "ATC3: the half hour is not closed at this read, ${step.why}; the next read asks again")
+                aapsLogger.debug(LTag.PUMP, "ATC3: the window is not closed at this read, ${step.why}; the next read asks again")
                 trace.event(Atc3TraceCat.HIST, "period", "state" to "postponed", "why" to step.why, "from" to from.readMs, "bolus" to bolus)
             }
 
-            is Atc3BasalPeriod.Step.Restart  -> begin(card, before?.copy(checked = true), step.why)
+            is Atc3BasalPeriod.Step.Restart  -> begin(card, null, step.why)
 
             Atc3BasalPeriod.Step.Wait        -> Unit
         }
@@ -167,29 +190,11 @@ class Atc3BasalPeriodKeeper @Inject constructor(
     fun dayTotalOf(dayMs: Long): Double? =
         atc3Manager.readDailyStats()?.firstOrNull { !it.isEmpty && it.isDatePlausible && it.isSameDayAs(dayMs) }?.totalUnits
 
-    /** A period begins at the read just made without the one before it being closed: its rows stay as they are. */
-    fun begin(card: Atc3PumpState.StatusCard, closed: Atc3BasalPeriod.Closed?, why: String) {
+    /** A window begins at the read just made without the one before it being closed: its rows stay as they are. */
+    private fun begin(card: Atc3PumpState.StatusCard, closed: Atc3BasalPeriod.Closed?, why: String) {
         val readMs = card.readAtMs
-        preferences.put(
-            Atc3StringNonKey.BasalPeriod,
-            Atc3BasalPeriod.State(Atc3BasalPeriod.Mark(readMs, card.deliveredTodayUnits, dateUtil.now()), closed).encode()
-        )
+        val period = Atc3BasalPeriod.State(Atc3BasalPeriod.Mark(readMs, card.deliveredTodayUnits, dateUtil.now()), closed)
+        store.update { it.copy(basalPeriod = period) }
         trace.event(Atc3TraceCat.HIST, "period", "state" to "begun", "why" to why, "at" to readMs, "counter" to card.deliveredTodayUnits)
-    }
-
-    /**
-     * The pump is back after being held stopped for want of an answer: in the exact basal mode the
-     * half hour under way begins at this read, what lies before it having been written.
-     */
-    fun beginAfterLinkBack(card: Atc3PumpState.StatusCard) {
-        if (!preferences.get(Atc3BooleanKey.ExactBasal)) return
-        val state = Atc3BasalPeriod.State.decode((preferences.get(Atc3StringNonKey.BasalPeriod) as String?).orEmpty())
-        begin(card, state.closed?.copy(checked = true), "link_back")
-    }
-
-    private companion object {
-
-        /** Under any step of the pump: a count is below another only when it is so by more than this. */
-        const val COUNT_EPSILON = 1e-6
     }
 }

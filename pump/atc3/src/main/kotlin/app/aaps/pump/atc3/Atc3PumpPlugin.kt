@@ -55,7 +55,6 @@ import app.aaps.pump.atc3.command.Atc3SetBtPassword
 import app.aaps.pump.atc3.command.Atc3SetSuspended
 import app.aaps.pump.atc3.command.Atc3TbrResult
 import app.aaps.pump.atc3.command.Atc3WriteSettings
-import app.aaps.pump.atc3.history.Atc3BolusSpacing
 import app.aaps.pump.atc3.history.Atc3HistoryEvents
 import app.aaps.pump.atc3.history.Atc3HistorySync
 import app.aaps.pump.atc3.keys.Atc3BooleanKey
@@ -180,9 +179,6 @@ class Atc3PumpPlugin @Inject constructor(
      */
     private fun stopIsOpen(): Boolean = pumpState.notDelivering || atc3HistorySync.openTbr()?.suspension == true
 
-    /** Keeps two of the driver's boluses far enough apart for their records to be told apart, see [Atc3BolusSpacing]. */
-    private val bolusSpacing = Atc3BolusSpacing()
-
     /**
      * Ask for the pump's state when nothing else would: the queue connects only with something to send,
      * and a bolus given on the pump would go unseen until AAPS's keepalive. Asked when the loop has
@@ -291,14 +287,15 @@ class Atc3PumpPlugin @Inject constructor(
      * 1. the status, without which everything after is a guess;
      * 2. alarms, each re-reading its subject;
      * 3. whether the pump delivers at all;
-     * 4. the comparison of the pump's count with the AAPS journal, before anything of this read is
-     *    written, then what the pump runs into AAPS, and the pump's journals on a disagreement, see
-     *    [Atc3Reconciliation.reconcile];
-     * 5. the exact basal mode's half hour, and the day's account for the screen;
+     * 4. the window of the basal account begun where there is nothing to close from, then the
+     *    comparison of the pump's count with the AAPS journal from the window's start, before anything
+     *    of this read is written, then what the pump runs into AAPS, and the bolus journal on a
+     *    disagreement, see [Atc3Reconciliation.reconcile];
+     * 5. the window closed at the half hour, and the day's account for the screen;
      * 6. the clock, last of what touches the pump: writing it moves where later records land;
      * 7. housekeeping: battery, firmware, profiles.
      *
-     * A command of the loop's goes only when the comparison stood, see [dataChangedUnderTheLoop].
+     * A command of the loop's goes unless a bolus it did not know of turned up, see [dataChangedUnderTheLoop].
      */
     override fun getPumpStatus(reason: String) = runBlocking { tick(reason) }
 
@@ -316,13 +313,15 @@ class Atc3PumpPlugin @Inject constructor(
         // The heartbeat the held link is watched by, once per link.
         atc3Manager.ensureHeartbeatPeriod()
         // 1. The one read the tick cannot go on without.
-        if (atc3Manager.readStatus() == null) {
+        val card = atc3Manager.readStatus()
+        if (card == null) {
             trace.event(Atc3TraceCat.DRV, "status.end", "ok" to false, "why" to "no_status", "ms" to trace.since(startedAt))
             return
         }
         traceState()
-        // The answer a stop for want of one would be counted from, see [Atc3LinkKeeper].
+        // The answer a stop for want of one would be counted from, and the one that ends it, see [Atc3LinkKeeper].
         linkKeeper.noteAnswer()
+        linkKeeper.closeStop(card)
 
         // 2. Alarms first.
         announceAlarms()
@@ -334,14 +333,13 @@ class Atc3PumpPlugin @Inject constructor(
         // 3. Is it delivering at all.
         announceSuspension(pumpState.notDelivering)
 
-        // 4. The pump's count against the AAPS journal, and what the pump runs into AAPS.
-        val resolved = reconciliation.reconcile()
+        // 4. The window, then the pump's count against the AAPS journal from its start, and what the pump runs into AAPS.
+        val begun = basalPeriods.beginIfNeeded(card)
+        val resolved = reconciliation.reconcile(readJournal = begun)
         reconciliation.reportDeliveryStopped()
 
-        // 5. The exact basal mode's half hour, by the same count.
-        basalPeriods.closeIfDue(
-            journalRead = resolved.reconciled != null, readHistory = reconciliation::readBolusHistory, anchor = reconciliation::anchor
-        )
+        // 5. The window closed at the half hour, by the same count.
+        basalPeriods.closeIfDue(journalRead = resolved.journalRead)
 
         // The day so far by both accounts.
         reconciliation.noteDayAccount()
@@ -358,36 +356,33 @@ class Atc3PumpPlugin @Inject constructor(
 
         trace.event(
             Atc3TraceCat.DRV, "status.end",
-            "ok" to (resolved.tbrRead && resolved.resolution != Atc3Reconciliation.Resolution.READ_FAILED),
+            "ok" to (resolved.tbrRead && !resolved.readFailed),
             "state" to resolved.verdict.trace(),
-            "resolution" to resolved.resolution.name.lowercase(),
+            "resolution" to resolved.outcome,
             "tbr" to resolved.tbrRead,
             "ms" to trace.since(startedAt)
         )
     }
 
     /**
-     * A therapy command goes to the pump only when the data the loop decided on was the pump's: the
-     * status just read is compared with the AAPS journal, and when the journals had to change what AAPS
-     * holds or could not explain the count, the command is refused and the loop decides again.
+     * In front of a therapy command the pump's bolus journal is read: a bolus given on the pump that
+     * the loop did not know of is written, and the loop's command is refused so that it decides again.
+     * A temporary basal or a cancel found on the pump is written, and the command goes. A journal that
+     * could not be read refuses the loop's command too.
      *
-     * @param loops true for the loop's decision; false for the user's command, which goes through whatever the journals said
+     * @param loops true for the loop's decision; false for the user's command, which goes through whatever the journal said
      * @return the refusal, or null when the data stood
      */
     private suspend fun dataChangedUnderTheLoop(loops: Boolean = true): PumpEnactResult? {
-        // No status decoded yet: nothing to compare, and the bolus history read is the barrier.
-        if (pumpState.lastStatus == null) {
-            reconciliation.ensureHistoryFresh()
-            return null
-        }
-        val resolved = reconciliation.reconcile()
+        // No status decoded yet: nothing to compare, and the bolus journal is read all the same.
+        val resolved = reconciliation.reconcile(statusRead = pumpState.lastStatus != null, readJournal = true)
         if (resolved.stood) return null
         if (!loops) {
-            trace.event(Atc3TraceCat.DRV, "command_kept", "why" to resolved.resolution.name.lowercase(), "who" to "user")
+            trace.event(Atc3TraceCat.DRV, "command_kept", "why" to resolved.outcome, "who" to "user")
             return null
         }
-        aapsLogger.warn(LTag.PUMP, "ATC3: refusing the command, the journal changed under the loop (${resolved.resolution.name.lowercase()})")
-        trace.event(Atc3TraceCat.DRV, "command_refused", "why" to resolved.resolution.name.lowercase())
+        aapsLogger.warn(LTag.PUMP, "ATC3: refusing the command, a bolus turned up under the loop (${resolved.outcome})")
+        trace.event(Atc3TraceCat.DRV, "command_refused", "why" to resolved.outcome)
         return failed(rh.gs(R.string.atc3_command_data_changed))
     }
 
@@ -533,7 +528,8 @@ class Atc3PumpPlugin @Inject constructor(
             return notConnected()
         }
         refusedWhileLocked()?.let { return it }
-        reconciliation.ensureHistoryFresh()
+        // A bolus given on the pump reaches AAPS before the profile is changed under it.
+        reconciliation.readBoluses()
         val rates = Atc3PumpState.buildBasalSlots(profile) { PumpType.ATC3.determineCorrectBasalSize(it) }
         val failure = atc3Manager.writeBasalProfile(rates, pumpDescription.basalStep)
         return if (failure == null) {
@@ -598,17 +594,14 @@ class Atc3PumpPlugin @Inject constructor(
         }
         refusedWhileLocked()?.let { return it }
 
-        // Nothing sent or written yet: the only place a hold costs nothing to cancel.
-        holdApart()?.let { return it }
-
-        // The status first: a bolus given elsewhere meanwhile is then accounted for, and the journals are
-        // read when the count and the AAPS journal disagree.
+        // The status first, then the pump's bolus journal: a bolus given elsewhere meanwhile is accounted
+        // for before this one goes.
         val statusRead = atc3Manager.readStatus() != null
-        val resolved = reconciliation.reconcile(statusRead)
+        val resolved = reconciliation.reconcile(statusRead, readJournal = true)
         trace.event(
             Atc3TraceCat.HIST, "bolus_baseline",
             "why" to resolved.verdict.trace(),
-            "outcome" to resolved.resolution.name.lowercase()
+            "outcome" to resolved.outcome
         )
         smbRefused(detailedBolusInfo, resolved)?.let { return it }
         // A stopped pump turns every bolus down: said here, nothing sent.
@@ -619,23 +612,12 @@ class Atc3PumpPlugin @Inject constructor(
             return failed(rh.gs(R.string.atc3_pump_suspended))
         }
 
-        var temporaryId = 0L
-        var startedAtMs = 0L
+        // No row yet: the row comes from the pump's record, and until then the bolus is expected.
         val outcome = bolusDelivery.bolus(
             units = requested,
-            onAccepted = { acceptedAt ->
-                startedAtMs = acceptedAt
-                // The next bolus waits until this start is a minute old, see [holdApart].
-                bolusSpacing.started(acceptedAt)
-                temporaryId = atc3HistorySync.registerPending(
-                    ackAtMs = acceptedAt,
-                    requestedUnits = requested,
-                    type = detailedBolusInfo.bolusType
-                )
-            },
+            onAccepted = { acceptedAt -> atc3HistorySync.expect(acceptedAt, requested, detailedBolusInfo.bolusType) },
             onProgress = { delivered ->
                 BolusProgressData.delivered = delivered
-                atc3HistorySync.onProgress(temporaryId, delivered)
                 rxBus.send(EventOverviewBolusProgress(rh, delivered, detailedBolusInfo.id))
             }
         )
@@ -646,123 +628,58 @@ class Atc3PumpPlugin @Inject constructor(
             aapsLogger.error(LTag.PUMP, "ATC3: bolus not started, $comment")
             return failed(comment)
         }
-        // Closed by its completion frame at the frame's amount; the record is read now, so the row takes
-        // the pump's minute at once rather than at some later read.
-        if (outcome.completed && outcome.sawProgress &&
-            atc3HistorySync.settleCompleted(temporaryId, outcome.reportedUnits)
-        ) {
-            pinSettledBolus(startedAtMs, requested)
-            return judgeBolus(requested, outcome.reportedUnits, outcome.cancelled)
-        }
+        // What the pump was seen to deliver: the row's amount when the pump writes no record of the bolus.
+        atc3HistorySync.seen(outcome.acceptedAtMs, outcome.reportedUnits)
+        // The pump's record says what went in, and makes the row.
+        val recorded = recordedUnits(outcome.acceptedAtMs)
+        if (recorded != null) return judgeBolus(requested, recorded, outcome.cancelled)
 
-        // Cut short: what went in is for the pump's history to say.
-        val history = atc3Manager.readBolusHistoryUntil(Atc3Const.BOLUS_RECORD_POLL_ATTEMPTS) {
-            atc3HistorySync.wouldResolve(it.records, temporaryId)
-        }
-        val confirmed = history?.let { atc3HistorySync.reconcileBoluses(it.records, it.recordCount) }?.confirmedUnits
+        // No record yet, or the pump could not be asked: judged on the last progress, so a bolus that
+        // stalled does not pass for want of a record. The record makes the row when it comes.
+        aapsLogger.error(LTag.PUMP, "ATC3: the pump has not recorded this bolus yet")
+        commandQueue.readStatus(rh.gs(R.string.atc3_bolus_unconfirmed), null)
+        trace.event(Atc3TraceCat.DRV, "bolus_unconfirmed", "asked" to requested, "seen" to outcome.reportedUnits)
+        val judged = judgeBolus(requested, outcome.reportedUnits, outcome.cancelled, fromRecord = false)
+        return if (judged.success) judged.comment(rh.gs(R.string.atc3_bolus_unconfirmed)) else judged
+    }
 
-        if (confirmed == null) {
-            // Two things reach here: the history read without the bolus, which is evidence, or the history
-            // not read at all, likely as the link cut the bolus, which is none: the pump goes on delivering.
-            val asked = history != null
-            // Recorded at what was asked; another connection is asked for so the pump's account follows soon.
-            aapsLogger.error(
-                LTag.PUMP,
-                if (asked) "ATC3: the pump has not recorded this bolus yet"
-                else "ATC3: the pump could not be asked about this bolus"
-            )
-            commandQueue.readStatus(rh.gs(R.string.atc3_bolus_unconfirmed), null)
-            if (!asked && !outcome.cancelled) {
-                // The link went, not the bolus: the pump delivers what it accepted. Answered as delivered, as its
-                // row counts; the record corrects the row later, and a shortfall is said then.
-                atc3HistorySync.answeredWhole(temporaryId)
-                trace.event(Atc3TraceCat.DRV, "bolus_unconfirmed", "asked" to requested, "seen" to outcome.reportedUnits)
-                return pumpEnactResultProvider.get().success(true).enacted(true).bolusDelivered(requested)
-                    .comment(rh.gs(R.string.atc3_bolus_unconfirmed))
-            }
-            // Judged on the last progress: a bolus that stalled must not pass because its record is missing.
-            val judged = judgeBolus(requested, outcome.reportedUnits, outcome.cancelled, fromRecord = false)
-            // One that ran to the end and only lacks its record is said to be unconfirmed; one
-            // the pump answered about without a record of it keeps the shortfall it showed.
-            return if (judged.success || !asked) judged.comment(rh.gs(R.string.atc3_bolus_unconfirmed)) else judged
+    /**
+     * What the pump's record of the bolus accepted at [acceptedAtMs] says went in, or null when none
+     * came. Read a few times, as the pump writes the record a moment after the bolus ends; every read
+     * goes through the reconciler, so the record makes the row the moment it is seen.
+     */
+    private suspend fun recordedUnits(acceptedAtMs: Long): Double? {
+        repeat(Atc3Const.BOLUS_RECORD_POLL_ATTEMPTS) { attempt ->
+            delay(Atc3Const.EFFECT_POLL_INTERVAL_MS)
+            val reconciled = reconciliation.readBoluses() ?: return null
+            reconciled.confirmed[acceptedAtMs]?.let { return it }
+            aapsLogger.debug(LTag.PUMP, "ATC3: the bolus is not in the pump's history yet, check ${attempt + 1}")
         }
-        return judgeBolus(requested, confirmed, outcome.cancelled)
+        return null
     }
 
     /**
      * Refuse an SMB the loop decided on from data that was not the pump's: a bolus reached AAPS
-     * after the loop stamped its decision, or the comparison in front of this bolus did not stand.
-     * A bolus the user asked for is theirs to decide on and is not refused here; a refused SMB is
-     * decided again by the loop on the corrected data.
+     * after the loop stamped its decision, or a bolus the loop did not know of turned up in front of
+     * this one, or the pump's records could not be read. A bolus the user asked for is theirs to
+     * decide on and is not refused here; a refused SMB is decided again by the loop on the corrected data.
      *
      * @return the answer to give, or null when the SMB may go ahead
      */
     private fun smbRefused(info: DetailedBolusInfo, resolved: Atc3Reconciliation.Resolved): PumpEnactResult? {
         if (info.bolusType != BS.Type.SMB) return null
-        val imported = resolved.reconciled?.newestImportedAtMs
+        // Over every read, not this one only: a bolus a tick imported after the loop decided is just as unknown to it.
+        val imported = reconciliation.newestForeignBolusAtMs
         if (info.lastKnownBolusTime != 0L && imported != null && imported > info.lastKnownBolusTime) {
             aapsLogger.warn(LTag.PUMP, "ATC3: refusing the SMB, a bolus at $imported reached us after the loop decided at ${info.lastKnownBolusTime}")
             trace.event(Atc3TraceCat.DRV, "smb_refused", "importedAt" to imported, "lastBolus" to info.lastKnownBolusTime, "units" to info.insulin)
             return failed(rh.gs(R.string.atc3_smb_stale_iob))
         }
         if (resolved.stood) return null
-        val why = resolved.resolution.name.lowercase()
+        val why = resolved.outcome
         aapsLogger.warn(LTag.PUMP, "ATC3: refusing the SMB, the journal did not stand under the loop ($why)")
         trace.event(Atc3TraceCat.DRV, "smb_refused", "why" to why, "units" to info.insulin)
         return failed(rh.gs(R.string.atc3_smb_data_changed))
-    }
-
-    /**
-     * Hold a bolus until the previous one's record can no longer be taken for its own, see
-     * [Atc3BolusSpacing]: held, not refused, before anything is sent, so it costs no command budget and
-     * a cancel meanwhile costs nothing. The cancel is seen through [BolusProgressData.stopPressed].
-     *
-     * @return null when the bolus may go, or the answer when it was cancelled
-     */
-    private suspend fun holdApart(): PumpEnactResult? {
-        val holdMs = bolusSpacing.waitMs(dateUtil.now())
-        if (holdMs <= 0L) return null
-        aapsLogger.debug(
-            LTag.PUMP,
-            "ATC3: holding the bolus for ${holdMs}ms, the previous one started too recently for the records to be told apart"
-        )
-        return holdBolus(holdMs, "bolus_held")
-    }
-
-    /** The hold itself: wait [holdMs], watching the stop button. @return the answer when cancelled, else null */
-    private suspend fun holdBolus(holdMs: Long, event: String): PumpEnactResult? {
-        var remaining = holdMs
-        while (remaining > 0L) {
-            if (BolusProgressData.stopPressed) {
-                aapsLogger.debug(LTag.PUMP, "ATC3: the bolus was cancelled while held, after ${holdMs - remaining}ms")
-                trace.event(
-                    Atc3TraceCat.DRV, "bolus_hold_cancelled",
-                    "askedMs" to holdMs,
-                    "heldMs" to (holdMs - remaining)
-                )
-                // Said as a cancel, not as a failure of the pump; still not enacted, as nothing left the reservoir.
-                return failed(rh.gs(R.string.atc3_bolus_cancelled))
-            }
-            val step = minOf(remaining, BOLUS_HOLD_POLL_MS)
-            delay(step)
-            remaining -= step
-        }
-        trace.event(Atc3TraceCat.DRV, event, "ms" to holdMs)
-        return null
-    }
-
-    /**
-     * Read the record of a bolus just closed on its completion frame, so it dates the row once, now, and
-     * is filed under the row's id. A record that does not turn up is left to the next read.
-     */
-    private suspend fun pinSettledBolus(startedAtMs: Long, requestedUnits: Double) {
-        val history = atc3Manager.readBolusHistoryUntil(Atc3Const.BOLUS_RECORD_POLL_ATTEMPTS) {
-            atc3HistorySync.holdsRecordOf(it.records, startedAtMs, requestedUnits)
-        }
-        val found = history != null && atc3HistorySync.holdsRecordOf(history.records, startedAtMs, requestedUnits)
-        if (history != null) atc3HistorySync.reconcileBoluses(history.records, history.recordCount)
-        if (!found) aapsLogger.warn(LTag.PUMP, "ATC3: the record of the bolus started at $startedAtMs is not in the history yet")
-        trace.event(Atc3TraceCat.HIST, "bolus_record", "read" to (history != null), "found" to found)
     }
 
     /**
@@ -804,6 +721,12 @@ class Atc3PumpPlugin @Inject constructor(
         // until somebody has looked at the pump.
         if (reconciliation.deliveryStopped)
             value.set(false, rh.gs(R.string.atc3_no_delivery_loop_blocked), this)
+        // Extended and dual boluses let through on the pump: the pump keeps no record of a bolus
+        // given while an extended one runs, and writes them all as one dual bolus when it ends.
+        // Nothing the loop gives in that time reaches AAPS, so the loop does not run at all while
+        // the pump is set to allow them.
+        if (pumpState.settings?.extendedBolusAllowed == true)
+            value.set(false, rh.gs(R.string.atc3_extended_loop_blocked), this)
         // No answer for half an hour: nothing is known of the pump, and nothing is decided for it
         // until it has answered and the time without an answer is written. See [Atc3LinkWatch].
         if (linkKeeper.isHeldStopped) value.set(false, rh.gs(R.string.atc3_link_loop_blocked), this)
@@ -891,14 +814,14 @@ class Atc3PumpPlugin @Inject constructor(
         val level = pumpState.reservoirUnits
         val wentUp = reservoirSeenUnits >= 0.0 && level > reservoirSeenUnits + Atc3Protocol.DOSE_SCALE
         reservoirSeenUnits = level
-        // A refill is a beginning for the comparison, whether or not its record is read.
-        if (wentUp) reconciliation.noteRefill()
+        // A refill begins the window anew, whether or not its record is read.
+        if (wentUp) basalPeriods.noteRefill()
         val due = wentUp || refillsReadAtMs == 0L || now - refillsReadAtMs >= Atc3Const.ALARM_READ_INTERVAL_MS
         if (!due) return
         val records = atc3Manager.readRefillHistory() ?: return
         refillsReadAtMs = now
         // One the ticks did not see is in the journal all the same.
-        if (historyEvents.recordRefills(records) > 0) reconciliation.noteRefill()
+        if (historyEvents.recordRefills(records) > 0) basalPeriods.noteRefill()
     }
 
     /** Read the alarm history when the status shows one, and every [Atc3Const.ALARM_READ_INTERVAL_MS] for one that came and went. */
@@ -959,7 +882,7 @@ class Atc3PumpPlugin @Inject constructor(
                 return failed(it)
             }
             val cancelledAt = cancel.acceptedAtMs.takeIf { it > 0L } ?: dateUtil.now()
-            atc3HistorySync.tbrStopped(cancelledAt, journal = reconciliation.journal)
+            atc3HistorySync.tbrStopped(cancelledAt)
         }
         val result = atc3Manager.setTempBasal(rate, durationInMinutes)
         result.failure?.let {
@@ -983,7 +906,7 @@ class Atc3PumpPlugin @Inject constructor(
         }
         val pumpStart = record?.takeIf { isCommandOf(it, result) }
         if (pumpStart == null) aapsLogger.debug(LTag.PUMP, "ATC3: the pump's start of the temporary basal just set is not known yet")
-        atc3HistorySync.tbrStartedByAaps(result.acceptedAtMs, result.rate, result.durationMinutes, pumpStart, type = type, journal = reconciliation.journal)
+        atc3HistorySync.tbrStartedByAaps(result.acceptedAtMs, result.rate, result.durationMinutes, pumpStart, type = type)
     }
 
     /** Whether the pump's record is the command just accepted: same rate and duration, a start near the acknowledgement. */
@@ -1011,7 +934,7 @@ class Atc3PumpPlugin @Inject constructor(
         runBlocking { tracked("tbr_cancel", "enforceNew" to enforceNew) { cancelTempBasalInner(enforceNew) } }
 
     /**
-     * @param enforceNew true for the user's own cancel, which goes through whatever the journals said;
+     * @param enforceNew true for the user's own cancel, which goes through whatever the journal said;
      *   the loop's own cancel comes without it
      */
     private suspend fun cancelTempBasalInner(enforceNew: Boolean = false): PumpEnactResult {
@@ -1024,7 +947,7 @@ class Atc3PumpPlugin @Inject constructor(
         // A stopped pump delivers nothing, its temporary basal included: nothing to cancel, and the open
         // row is the stop, which a cancel must not end. The stop is still written from this status.
         if (card.notDelivering) {
-            reconciliation.recordRunningState()
+            reconciliation.syncTbrFromStatus()
             aapsLogger.debug(LTag.PUMP, "ATC3: the pump is stopped, nothing to cancel")
             trace.event(Atc3TraceCat.DRV, "tbr_cancel_skipped", "why" to "suspended")
             // Often the only look at a stop: the resume is watched for from here.
@@ -1041,7 +964,7 @@ class Atc3PumpPlugin @Inject constructor(
                     atc3Manager.readFinishedTbr()?.let { atc3HistorySync.realEndOf(it) }
                 else null
             val ranOut = open?.takeIf { !it.suspension }?.let { it.startedAtMs + it.ownDurationMs }?.takeIf { it <= now }
-            atc3HistorySync.tbrStopped(endedAt ?: ranOut ?: now, byStamp = endedAt != null, journal = reconciliation.journal)
+            atc3HistorySync.tbrStopped(endedAt ?: ranOut ?: now)
             return pumpEnactResultProvider.get().success(true).enacted(false).isTempCancel(true)
         }
         // Here rather than at the top: with nothing running there is nothing to send.
@@ -1053,7 +976,7 @@ class Atc3PumpPlugin @Inject constructor(
         }
         // The scheduled rate is back from the pump's acknowledgement of the cancel.
         val cancelledAt = cancel.acceptedAtMs.takeIf { it > 0L } ?: dateUtil.now()
-        atc3HistorySync.tbrStopped(cancelledAt, journal = reconciliation.journal)
+        atc3HistorySync.tbrStopped(cancelledAt)
         return pumpEnactResultProvider.get().success(true).enacted(true).isTempCancel(true)
     }
 
@@ -1221,12 +1144,6 @@ class Atc3PumpPlugin @Inject constructor(
                     title = R.string.atc3_trace_title, summary = R.string.atc3_trace_summary
                 )
             )
-            addPreference(
-                AdaptiveSwitchPreference(
-                    ctx = context, booleanKey = Atc3BooleanKey.ExactBasal,
-                    title = R.string.atc3_exact_basal_title, summary = R.string.atc3_exact_basal_summary
-                )
-            )
         }
     }
 
@@ -1279,7 +1196,5 @@ class Atc3PumpPlugin @Inject constructor(
         /** How far the pump's stamp of our temporary basal may sit from our acknowledgement: a minute, and the clock. */
         const val OWN_TBR_START_MS = 90_000L
 
-        /** How often a held bolus looks whether the user gave up on it. */
-        const val BOLUS_HOLD_POLL_MS = 250L
     }
 }

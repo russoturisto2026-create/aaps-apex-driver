@@ -21,10 +21,9 @@ import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.pump.atc3.trace.Atc3TraceCat
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -33,9 +32,24 @@ import javax.inject.Singleton
  * passes bytes both ways; it knows nothing of frames.
  *
  * Setting up is a chain of steps, each started by the callback of the one before: MTU, discovery,
- * the authorisation subscription, the password, the data subscription. A connect watchdog covers
- * the whole chain. [linkProtection] is read from the pump's answer to the password alone: the pump
- * accepts a link rather than a client, so being let in without one says nothing.
+ * the authorisation subscription, the password, the data subscription. Where the link is in that
+ * chain is [LinkState], and a step is taken only from the state before it, so a callback the stack
+ * repeats starts nothing twice. A connect watchdog covers the whole chain. [linkProtection] is read
+ * from the pump's answer to the password alone: the pump accepts a link rather than a client, so
+ * being let in without one says nothing.
+ *
+ * Each attempt at a link is a [Link] of its own, with its own callback, setup steps and watchdog.
+ * The stack can still report on a link it has been told to close, and a watchdog or a step can fire
+ * after its link has ended: whatever does not belong to the current link touches nothing. The link,
+ * its state and what the link knows change together under this object's lock, so nothing ever sees
+ * a link half ended. The link's start and end are told to [Atc3BleCallback] one at a time and in the
+ * order they happened, and a start is told only while its link is still the current one.
+ *
+ * Why the same check comes back so often: the stack answers on threads of its own, the timers fire on
+ * another, and the exchange writes from a third. A link can end between any two lines of code. So each
+ * place that acts for a link asks again, under the lock, whether that link is still the current one.
+ * Three places close such a gap the stack leaves open: a link that ends while the stack hands it over
+ * ([startLink]), while its watchdog is set ([armWatchdog]), and while its start is told.
  */
 @SuppressLint("MissingPermission")
 @Singleton
@@ -45,8 +59,51 @@ class Atc3BLE @Inject constructor(
     private val trace: Atc3Trace
 ) {
 
-    private var callback: Atc3BleCallback? = null
-    private var gatt: BluetoothGatt? = null
+    @Volatile private var callback: Atc3BleCallback? = null
+
+    /** Held while a link's start or end is told: one at a time, so they arrive in the order they happened. */
+    private val reportLock = Any()
+
+    /** Where the link is: from asking for it, through each setup step, to usable, and back to none. */
+    enum class LinkState { IDLE, CONNECTING, LINK_UP, DISCOVERING, AUTHORISING, SUBSCRIBING, READY }
+
+    /** One attempt at a link, from asking for it to its end. */
+    private inner class Link {
+
+        /** What the stack handed over for it; null in the moment between asking and the stack's answer. */
+        @Volatile var gatt: BluetoothGatt? = null
+        val callback = LinkCallback(this)
+
+        /** The setup steps, one at a time; a step that fails ends this link, and only this one. */
+        val ops = Atc3GattOps(aapsLogger, trace, scheduler) { kind, why -> endConnection("gatt $kind $why", link = this) }
+        @Volatile var watchdog: ScheduledFuture<*>? = null
+        @Volatile var writeCharacteristic: BluetoothGattCharacteristic? = null
+        @Volatile var notifyCharacteristic: BluetoothGattCharacteristic? = null
+        @Volatile var authWriteCharacteristic: BluetoothGattCharacteristic? = null
+    }
+
+    /** The current link, null when there is none; changes only together with [state]. */
+    @Volatile private var current: Link? = null
+
+    @Volatile private var state = LinkState.IDLE
+
+    internal val linkState: LinkState get() = state
+
+    /**
+     * Take [link] one step on, from [from] to [to], and do [then] in the same moment: nothing else
+     * changes the link meanwhile.
+     *
+     * @return false when [link] is not the current one or is not at [from]: the step is not the caller's
+     */
+    @Synchronized
+    private fun advance(link: Link, from: LinkState, to: LinkState, then: () -> Unit = {}): Boolean {
+        if (current !== link || state != from) return false
+        state = to
+        then()
+        return true
+    }
+
+    private fun isCurrent(link: Link): Boolean = current === link
 
     /** When the link was asked for and when it became usable, for the trace. */
     @Volatile private var connectingSince = 0L
@@ -64,61 +121,18 @@ class Atc3BLE @Inject constructor(
     var linkUpAtMs = 0L
         private set
 
-    /**
-     * Whether discovery has been started on this link: a second MTU callback, from another client on the
-     * same link, would otherwise start the setup twice and leave it stuck.
-     */
-    @Volatile private var discoveryStarted = false
+    private val backoff = Atc3Backoff()
 
-    @Volatile private var servicesResolved = false
-
-    @Volatile private var linkClaimed = false
-
-    /** @return true once per link, for the caller that may start discovery */
-    @Synchronized
-    internal fun claimDiscovery(): Boolean {
-        if (discoveryStarted) return false
-        discoveryStarted = true
-        return true
-    }
-
-    /** @return true once per link, for the caller that may begin the setup: the stack can report one link as connected twice */
-    @Synchronized
-    internal fun claimLinkUp(): Boolean {
-        if (linkClaimed) return false
-        linkClaimed = true
-        return true
-    }
-
-    /** @return true once per link, for the caller that may act on the discovered characteristics */
-    @Synchronized
-    internal fun claimServices(): Boolean {
-        if (servicesResolved) return false
-        servicesResolved = true
-        return true
-    }
-
-    /** True from asking for a link until its end has been reported, so that the end is reported exactly once. */
-    private val live = AtomicBoolean(false)
-
-    @Volatile private var watchdog: ScheduledFuture<*>? = null
-
-    /** Attempts in a row that never gave a usable link: what sets the wait before the next. */
-    @Volatile private var failures = 0
-
-    @Volatile private var blockedUntil = 0L
-
-    private val watchdogExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+    /** Runs the connect watchdog and the setup steps' timers; a test puts its own in before the first link. */
+    internal var scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "Atc3ConnectWatchdog").apply { isDaemon = true }
     }
 
-    /** How long connecting is held off, milliseconds, 0 when it is allowed: a failed stack fails again at once. */
-    val backoffRemainingMs: Long get() = (blockedUntil - System.currentTimeMillis()).coerceAtLeast(0L)
-
-    private var writeCharacteristic: BluetoothGattCharacteristic? = null
-    private var notifyCharacteristic: BluetoothGattCharacteristic? = null
-    private var authWriteCharacteristic: BluetoothGattCharacteristic? = null
-    private var authNotifyCharacteristic: BluetoothGattCharacteristic? = null
+    /**
+     * How long connecting is held off, milliseconds, 0 when it is allowed: a failed stack fails again at once,
+     * and a link the driver has just let go of is still up on the radio for a moment.
+     */
+    val backoffRemainingMs: Long get() = backoff.remainingMs
 
     /** The Bluetooth password to present, `000000` when none is entered. */
     @Volatile private var password: String = Atc3BtPassword.NONE
@@ -128,19 +142,17 @@ class Atc3BLE @Inject constructor(
     var linkProtection: Atc3LinkProtection = Atc3LinkProtection.UNKNOWN
         private set
 
-    private val writeGate = Semaphore(1)
+    /** How long a write may wait for the stack's report; a test shortens it. */
+    internal var writeTimeoutMs = WRITE_TIMEOUT_MS
 
-    @Volatile private var writeDone: CountDownLatch? = null
+    /** The write waiting for the stack's report, null when none; set and released under the lock. */
+    private var writeDone: CountDownLatch? = null
 
     @Volatile private var writeSucceeded: Boolean = false
 
-    @Volatile
-    var isConnected: Boolean = false
-        private set
+    val isConnected: Boolean get() = state == LinkState.READY
 
-    @Volatile
-    var isConnecting: Boolean = false
-        private set
+    val isConnecting: Boolean get() = state != LinkState.IDLE && state != LinkState.READY
 
     fun setCallback(callback: Atc3BleCallback?) {
         this.callback = callback
@@ -150,11 +162,11 @@ class Atc3BLE @Inject constructor(
     private val adapterStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
-            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
-            if (state != BluetoothAdapter.STATE_TURNING_OFF && state != BluetoothAdapter.STATE_OFF) return
-            if (!live.get()) return
+            val adapterState = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            if (adapterState != BluetoothAdapter.STATE_TURNING_OFF && adapterState != BluetoothAdapter.STATE_OFF) return
+            if (state == LinkState.IDLE) return
             aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the phone's Bluetooth is going off, the link is gone")
-            trace.event(Atc3TraceCat.BLE, "adapter_off", "state" to state)
+            trace.event(Atc3TraceCat.BLE, "adapter_off", "state" to adapterState)
             endConnection("bluetooth off")
         }
     }
@@ -175,13 +187,25 @@ class Atc3BLE @Inject constructor(
         this.password = password?.trim()?.takeIf { Atc3BtPassword.isValid(it) } ?: Atc3BtPassword.NONE
     }
 
-    /** @return false when the address is unusable or Bluetooth is not available */
+    /**
+     * Whether the phone's Bluetooth is on. Off, some phones still let a link to the pump come up, and
+     * then fail it at the first write: the caller tries no link while it is off.
+     */
+    val isBluetoothOn: Boolean get() = bluetoothAdapter()?.isEnabled == true
+
+    /** Whether the phone has Bluetooth at all. */
+    val hasBluetooth: Boolean get() = bluetoothAdapter() != null
+
+    /** Whether [address] is a Bluetooth address a link can be asked for. */
+    fun isValidAddress(address: String): Boolean = BluetoothAdapter.checkBluetoothAddress(address)
+
+    /**
+     * Ask for a link. Whether to ask at all, and when, is decided by the caller, see [Atc3Connection.connect].
+     *
+     * @return false when the address is unusable or Bluetooth is not available
+     */
     fun connect(address: String): Boolean {
-        if (address.isBlank()) {
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: no pump address configured")
-            return false
-        }
-        if (isConnected || isConnecting) {
+        if (state != LinkState.IDLE) {
             aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: connect ignored, already connected or connecting")
             trace.event(Atc3TraceCat.BLE, "connect_skipped", "connected" to isConnected)
             return true
@@ -195,35 +219,69 @@ class Atc3BLE @Inject constructor(
             aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: invalid pump address $address")
             return false
         }
-        val waiting = backoffRemainingMs
-        if (waiting > 0) {
-            aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: not connecting yet, ${waiting}ms of backoff left")
-            trace.event(Atc3TraceCat.BLE, "backoff", "ms" to waiting, "after" to failures)
+        val device = try {
+            adapter.getRemoteDevice(address)
+        } catch (e: IllegalArgumentException) {
+            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: cannot connect to $address", e)
             return false
         }
-        return try {
-            val device = adapter.getRemoteDevice(address)
-            linkProtection = Atc3LinkProtection.UNKNOWN
-            isConnecting = true
-            live.set(true)
-            opsClosed = false
-            gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: connecting to $address")
-            connectingSince = trace.now()
-            trace.event(Atc3TraceCat.BLE, "connecting")
-            armWatchdog()
-            true
-        } catch (e: SecurityException) {
-            isConnecting = false
-            live.set(false)
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: missing Bluetooth permission", e)
-            false
-        } catch (e: IllegalArgumentException) {
-            isConnecting = false
-            live.set(false)
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: cannot connect to $address", e)
-            false
+        aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: connecting to $address")
+        return startLink { linkCallback -> device.connectGatt(context, false, linkCallback, BluetoothDevice.TRANSPORT_LE) }
+    }
+
+    /**
+     * Begin a link: it is the current one before the stack is asked, so that the stack's first
+     * callbacks, which may come before [connectGatt] returns, find it.
+     *
+     * @param connectGatt asks the stack for the link with the callback given
+     * @return false when no attempt is under way: refused, or ended before the stack answered
+     */
+    internal fun startLink(connectGatt: (BluetoothGattCallback) -> BluetoothGatt?): Boolean {
+        val link = synchronized(this) {
+            if (state != LinkState.IDLE) return true
+            Link().also {
+                current = it
+                state = LinkState.CONNECTING
+                linkProtection = Atc3LinkProtection.UNKNOWN
+            }
         }
+        connectingSince = trace.now()
+        trace.event(Atc3TraceCat.BLE, "connecting")
+        armWatchdog(link)
+        val handed = try {
+            connectGatt(link.callback)
+        } catch (e: SecurityException) {
+            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: missing Bluetooth permission", e)
+            refused(link, "no permission")
+            return false
+        } catch (e: RuntimeException) {
+            // Whatever the stack throws, there is no attempt under way to wait for.
+            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the stack would not connect", e)
+            refused(link, "connect refused")
+            return false
+        }
+        val kept = synchronized(this) {
+            if (isCurrent(link)) link.gatt = handed
+            isCurrent(link)
+        }
+        if (!kept) {
+            // The link ended while the stack was handing it over, and was reported then: what the stack handed is closed here.
+            aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: the link ended before the stack answered, closing what it handed over")
+            trace.event(Atc3TraceCat.BLE, "connect_abandoned")
+            // It never came up, so the end already set a wait of a failed attempt, longer than a settle.
+            close(handed)
+            return false
+        }
+        // No client from the stack is a stack that does not answer: the watchdog ends the attempt.
+        if (handed == null) aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the stack gave no link")
+        return true
+    }
+
+    /** End an attempt the stack would not start; it would not start the next one either, so the next waits. */
+    private fun refused(link: Link, reason: String) {
+        endConnection(reason, Ending.NOT_STARTED, link)
+        val wait = synchronized(this) { backoff.afterRefusal() }
+        trace.event(Atc3TraceCat.BLE, "backoff_set", "why" to reason, "answered" to true, "after" to backoff.failures, "ms" to wait)
     }
 
     fun disconnect() {
@@ -232,37 +290,79 @@ class Atc3BLE @Inject constructor(
         endConnection("requested")
     }
 
-    /** Close the link and report its end exactly once, whoever asked for it. */
-    private fun endConnection(reason: String, stackAnswered: Boolean = true) {
-        watchdog?.cancel(false)
-        watchdog = null
-        val wasReady = readySince != 0L
+    /** How a link ended: what the wait before the next attempt is set from. */
+    private enum class Ending {
+
+        /** The driver let the link go or gave up on it; the stack answered all along. The radio may hold the link a moment more. */
+        LET_GO,
+
+        /** The stack said the link is gone: nothing of it is left on the radio. */
+        STACK_DROPPED,
+
+        /** The link did not come up in time. A link that has become ready meanwhile is left alone. */
+        NEVER_UP,
+
+        /** The stack stopped answering on a usable link: counted like an attempt that never came up. */
+        STACK_SILENT,
+
+        /** The stack would not start the attempt. Nobody is told: the caller learns it from the return value. */
+        NOT_STARTED
+    }
+
+    /**
+     * End the link and report its end exactly once, whoever asked for it.
+     *
+     * @param link the link the caller belongs to, null for whatever link there is: a watchdog or a step of a link already ended ends nothing
+     * @return true when a link was ended here
+     */
+    private fun endConnection(reason: String, ending: Ending = Ending.LET_GO, link: Link? = null): Boolean {
+        // The stack never answered: it is slow or wedged, and the wait grows each time.
+        val stackSilent = ending == Ending.NEVER_UP || ending == Ending.STACK_SILENT
+        val ended: Link
+        val pendingWrite: CountDownLatch?
+        val wait: Long
+        synchronized(this) {
+            if (link != null && current !== link) return false
+            if (ending == Ending.NEVER_UP && state == LinkState.READY) return false
+            lastHeardFromAt = 0L
+            ended = current ?: return false
+            val wasReady = state == LinkState.READY
+            current = null
+            state = LinkState.IDLE
+            readySince = 0L
+            linkUpAtMs = 0L
+            pendingWrite = writeDone
+            // Set with the state: a connect that sees the link idle sees the wait too.
+            wait = if (ending == Ending.NOT_STARTED) 0L
+            else backoff.afterEnd(
+                wasReady = wasReady && !stackSilent,
+                stackAnswered = !stackSilent,
+                released = ended.gatt != null && ending != Ending.STACK_DROPPED
+            )
+        }
+        ended.watchdog?.cancel(false)
+        ended.ops.close()
+        close(ended.gatt)
+        // Release a write that will never complete, so its caller fails at once.
+        pendingWrite?.countDown()
+        if (ending == Ending.NOT_STARTED) return true
+        if (wait > 0L) {
+            trace.event(
+                Atc3TraceCat.BLE, "backoff_set",
+                "why" to reason, "answered" to !stackSilent, "after" to backoff.failures, "ms" to wait
+            )
+        }
+        synchronized(reportLock) { callback?.onDisconnected() }
+        return true
+    }
+
+    private fun close(gatt: BluetoothGatt?) {
         try {
             gatt?.disconnect()
             gatt?.close()
         } catch (e: SecurityException) {
             aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: missing Bluetooth permission on disconnect", e)
         }
-        clearConnectionState()
-        if (!live.compareAndSet(true, false)) return
-        // Only an attempt that never gave a usable link counts towards the wait.
-        val wait = when {
-            wasReady       -> 0L
-            // The stack answered: it works, and the pump is out of reach. A flat wait.
-            stackAnswered  -> BACKOFF_ANSWERED_MS
-            // The stack said nothing: it is wedged, and only time helps, more of it each round.
-            else           -> (BACKOFF_BASE_MS shl failures.coerceAtMost(BACKOFF_MAX_SHIFT))
-                .coerceAtMost(BACKOFF_CAP_MS)
-        }
-        failures = if (wasReady || stackAnswered) 0 else failures + 1
-        blockedUntil = if (wait == 0L) 0L else System.currentTimeMillis() + wait
-        if (wait > 0L) {
-            trace.event(
-                Atc3TraceCat.BLE, "backoff_set",
-                "why" to reason, "answered" to stackAnswered, "after" to failures, "ms" to wait
-            )
-        }
-        callback?.onDisconnected()
     }
 
     /** The pump's heartbeat; counted like any frame, told apart only in the trace. */
@@ -278,25 +378,30 @@ class Atc3BLE @Inject constructor(
     val quietForMs: Long get() = if (lastHeardFromAt == 0L) -1L else System.currentTimeMillis() - lastHeardFromAt
 
     /** Give up on a connection attempt that is going nowhere, long before the stack or the queue would. */
-    private fun armWatchdog() {
-        watchdog?.cancel(false)
-        watchdog = watchdogExecutor.schedule({
-            if (isConnected) return@schedule
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the link did not come up in ${CONNECT_TIMEOUT_MS}ms, giving up")
+    private fun armWatchdog(link: Link) {
+        link.watchdog = scheduler.schedule({
+            // A link that has become ready, or has ended, is not ended again.
+            if (!endConnection("connect timeout", Ending.NEVER_UP, link)) return@schedule
+            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the link did not come up in ${CONNECT_TIMEOUT_MS}ms, gave up")
             trace.event(Atc3TraceCat.BLE, "connect_timeout", "ms" to CONNECT_TIMEOUT_MS)
-            endConnection("connect timeout", stackAnswered = false)
         }, CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        // A link ended while the watchdog was being set did not see it to cancel it.
+        if (!isCurrent(link)) link.watchdog?.cancel(false)
     }
 
     /**
-     * Write one payload and wait until the stack reports it done, so that writes go one at a time.
+     * Write one payload and wait until the stack reports it done. One write at a time is the caller's
+     * to keep: every write goes through the exchange, which runs one at a time.
      *
      * @return false when there is no usable link, the write was refused, or it did not complete in time
      */
     fun write(data: ByteArray): Boolean {
-        val currentGatt = gatt
-        val characteristic = writeCharacteristic
-        if (currentGatt == null || characteristic == null || !isConnected) {
+        // The state first: a link seen ready has its client and characteristics set.
+        val ready = state == LinkState.READY
+        val link = current
+        val currentGatt = link?.gatt
+        val characteristic = link?.writeCharacteristic
+        if (!ready || link == null || currentGatt == null || characteristic == null) {
             aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: write attempted without a ready connection")
             return false
         }
@@ -304,58 +409,45 @@ class Atc3BLE @Inject constructor(
         if (bluetoothAdapter()?.isEnabled == false) {
             aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the phone's Bluetooth is off, the link is gone")
             trace.event(Atc3TraceCat.BLE, "adapter_off", "state" to -1)
-            endConnection("bluetooth off")
+            endConnection("bluetooth off", link = link)
             return false
         }
-        writeGate.acquire()
+        val latch = CountDownLatch(1)
         try {
-            val latch = CountDownLatch(1)
-            writeDone = latch
-            writeSucceeded = false
+            // The link may have ended since it was seen ready: then there is nothing to write on.
+            val registered = synchronized(this) {
+                if (current !== link || state != LinkState.READY) return@synchronized false
+                writeDone = latch
+                writeSucceeded = false
+                true
+            }
+            if (!registered) {
+                aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the link ended before the write could be made")
+                return false
+            }
 
             val writeType =
                 if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0)
                     BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                 else
                     BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-
-            // The reason the stack gave for a refusal, for the trace.
-            var refusedWith = REFUSAL_UNNUMBERED
-            val issued = try {
-                @Suppress("DEPRECATION")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    val status = currentGatt.writeCharacteristic(characteristic, data, writeType)
-                    if (status == BluetoothStatusCodes.SUCCESS) {
-                        true
-                    } else {
-                        refusedWith = status
-                        aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: write refused by the Bluetooth stack, status $status")
-                        false
-                    }
-                } else {
-                    characteristic.writeType = writeType
-                    characteristic.value = data
-                    val ok = currentGatt.writeCharacteristic(characteristic)
-                    if (!ok) aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: write refused by the Bluetooth stack")
-                    ok
-                }
-            } catch (e: SecurityException) {
-                refusedWith = REFUSAL_PERMISSION
-                aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: missing Bluetooth permission on write", e)
-                false
-            }
+            val status = issueWrite(currentGatt, characteristic, data, writeType)
+            val issued = status == BluetoothStatusCodes.SUCCESS
             val issuedAt = trace.now()
 
             if (!issued) {
                 trace.event(
                     Atc3TraceCat.BLE, "write",
-                    "bytes" to data.size, "ok" to false, "why" to "refused", "status" to refusedWith
+                    "bytes" to data.size, "ok" to false, "why" to "refused", "status" to status
                 )
                 return false
             }
-            if (!latch.await(WRITE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: write did not complete in time")
+            if (!latch.await(writeTimeoutMs, TimeUnit.MILLISECONDS)) {
+                aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: write did not complete in time, ending the link")
                 trace.event(Atc3TraceCat.BLE, "write", "bytes" to data.size, "ok" to false, "why" to "timeout")
+                // Its report may still come, and the stack's report names no write: on this link it would
+                // be taken for the next write's. Ended, the link passes it over.
+                endConnection("write timeout", Ending.STACK_SILENT, link)
                 return false
             }
             trace.event(
@@ -367,9 +459,18 @@ class Atc3BLE @Inject constructor(
             if (writeSucceeded) trace.countOut(data.size)
             return writeSucceeded
         } finally {
-            writeDone = null
-            writeGate.release()
+            synchronized(this) { if (writeDone === latch) writeDone = null }
         }
+    }
+
+    /** The stack reported the data write of [link] done. */
+    private fun writeReported(link: Link, succeeded: Boolean) {
+        val latch = synchronized(this) {
+            if (current !== link) return
+            writeSucceeded = succeeded
+            writeDone
+        }
+        latch?.countDown()
     }
 
     private fun bluetoothAdapter(): BluetoothAdapter? =
@@ -386,7 +487,7 @@ class Atc3BLE @Inject constructor(
         /** A refusal for a missing permission rather than by the stack. */
         private const val REFUSAL_PERMISSION = -2
         private const val WRITE_TIMEOUT_MS = 5_000L
-        private const val CONNECT_TIMEOUT_MS = 15_000L
+        internal const val CONNECT_TIMEOUT_MS = 15_000L
 
         /** How long one setup step may go unanswered: long past any real answer, short enough to name the step that failed. */
         private const val GATT_OP_TIMEOUT_MS = 5_000L
@@ -397,197 +498,28 @@ class Atc3BLE @Inject constructor(
         internal const val OP_SUBSCRIBE_DATA = "subscribe:data"
         internal const val OP_WRITE_AUTH = "write:auth"
 
-        /** The wait after an attempt the stack never answered; it doubles from here. */
-        private const val BACKOFF_BASE_MS = 5_000L
-
-        /** The wait after an attempt the stack refused: flat, the stack works. */
-        private const val BACKOFF_ANSWERED_MS = 15_000L
-        private const val BACKOFF_CAP_MS = 60_000L
-
-        /** Keeps the doubling from overflowing. */
-        private const val BACKOFF_MAX_SHIFT = 5
-
         /** The status the pump refuses the data subscription with until it has a password; Android has no constant for it. */
         private const val GATT_WRITE_NOT_PERMITTED = 3
     }
 
-    // GATT operations, one at a time
+    /** The stack's callbacks for one link: what arrives for any other link is passed over. */
+    private inner class LinkCallback(private val link: Link) : BluetoothGattCallback() {
 
-    /**
-     * One request to the Bluetooth stack.
-     *
-     * @param kind      the name it is traced and completed under
-     * @param timeoutMs how long its callback may take
-     * @param issue     makes the call, returning whether the stack started it
-     */
-    private class GattOp(val kind: String, val timeoutMs: Long, val issue: () -> Boolean)
-
-    private val opLock = Any()
-    private val opQueue = ArrayDeque<GattOp>()
-
-    /** True once the link the queue served has ended: no step may be issued on a closing link. */
-    @Volatile private var opsClosed = false
-    private var opInFlight: GattOp? = null
-    private var opIssuedAt = 0L
-    private var opTimer: ScheduledFuture<*>? = null
-
-    /**
-     * Queue one GATT operation. The stack drops an operation issued while another is outstanding,
-     * without a callback, so each is issued only when the one before has been answered, and each is
-     * answered, timed out or refused, and traced.
-     */
-    internal fun enqueueOp(kind: String, timeoutMs: Long = GATT_OP_TIMEOUT_MS, issue: () -> Boolean) {
-        if (opsClosed) {
-            aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: not asking for $kind, the link it belonged to has ended")
-            trace.event(Atc3TraceCat.BLE, "op_rejected", "kind" to kind)
-            return
+        /** True when this callback's link is still the current one; said in the trace when it is not. */
+        private fun mine(what: String): Boolean {
+            if (isCurrent(link)) return true
+            trace.event(Atc3TraceCat.BLE, "stale_callback", "what" to what)
+            return false
         }
-        synchronized(opLock) {
-            opQueue.addLast(GattOp(kind, timeoutMs, issue))
-            trace.event(
-                Atc3TraceCat.BLE, "op_queued",
-                "kind" to kind,
-                "waiting" to opQueue.size,
-                "inflight" to (opInFlight?.kind ?: "-")
-            )
-        }
-        pumpOps()
-    }
 
-    private fun pumpOps() {
-        val op = synchronized(opLock) {
-            if (opInFlight != null) return
-            val next = opQueue.removeFirstOrNull() ?: return
-            opInFlight = next
-            opIssuedAt = trace.now()
-            next
-        }
-        val accepted = try {
-            op.issue()
-        } catch (e: SecurityException) {
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: missing Bluetooth permission issuing ${op.kind}", e)
-            false
-        }
-        trace.event(Atc3TraceCat.BLE, "op_sent", "kind" to op.kind, "ok" to accepted)
-        if (!accepted) {
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the stack would not start ${op.kind}")
-            failOp(op, "refused")
-            return
-        }
-        armOpTimer(op)
-    }
-
-    /** @return true when [kind] was the operation outstanding, false for a callback nobody was waiting for */
-    internal fun completeOp(kind: String, status: Int): Boolean {
-        val op = synchronized(opLock) {
-            val current = opInFlight
-            if (current == null || current.kind != kind) {
-                trace.event(
-                    Atc3TraceCat.BLE, "op_stray",
-                    "kind" to kind,
-                    "expected" to (current?.kind ?: "-"),
-                    "status" to status
-                )
-                return false
-            }
-            opTimer?.cancel(false)
-            opTimer = null
-            opInFlight = null
-            current
-        }
-        trace.event(
-            Atc3TraceCat.BLE, "op_done",
-            "kind" to op.kind,
-            "status" to status,
-            "ms" to trace.since(opIssuedAt)
-        )
-        pumpOps()
-        return true
-    }
-
-    /** Give up on an operation, and on the link with it: a setup that lost a step is ended, named. */
-    private fun failOp(op: GattOp, why: String) {
-        val waitedMs = trace.since(opIssuedAt)
-        synchronized(opLock) {
-            opTimer?.cancel(false)
-            opTimer = null
-            opInFlight = null
-            opQueue.clear()
-        }
-        trace.event(Atc3TraceCat.BLE, "op_failed", "kind" to op.kind, "why" to why, "ms" to waitedMs)
-        endConnection("gatt ${op.kind} $why")
-    }
-
-    private fun armOpTimer(op: GattOp) {
-        val timer = watchdogExecutor.schedule({
-            val outstanding = synchronized(opLock) { opInFlight === op }
-            if (outstanding) {
-                aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: ${op.kind} was never answered in ${op.timeoutMs}ms")
-                trace.event(Atc3TraceCat.BLE, "op_timeout", "kind" to op.kind, "ms" to op.timeoutMs)
-                failOp(op, "timeout")
-            }
-        }, op.timeoutMs, TimeUnit.MILLISECONDS)
-        synchronized(opLock) {
-            if (opInFlight === op) opTimer = timer else timer.cancel(false)
-        }
-    }
-
-    /** Drop everything outstanding and take no more: the link is gone. */
-    private fun cancelOps() {
-        opsClosed = true
-        synchronized(opLock) {
-            opTimer?.cancel(false)
-            opTimer = null
-            val dropped = opQueue.size + if (opInFlight != null) 1 else 0
-            if (dropped > 0) {
-                trace.event(
-                    Atc3TraceCat.BLE, "op_cancelled",
-                    "n" to dropped,
-                    "inflight" to (opInFlight?.kind ?: "-")
-                )
-            }
-            opQueue.clear()
-            opInFlight = null
-        }
-    }
-
-    /** What the stack is working on, for tests. */
-    internal fun opInFlightKind(): String? = synchronized(opLock) { opInFlight?.kind }
-
-    /** How many operations wait behind it, for tests. */
-    internal fun opQueueDepth(): Int = synchronized(opLock) { opQueue.size }
-
-    private fun discoverServices(gatt: BluetoothGatt) {
-        aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: discovering services")
-        // The one setup step that can be slow.
-        enqueueOp(OP_DISCOVER, DISCOVER_TIMEOUT_MS) { gatt.discoverServices() }
-    }
-
-    private fun clearConnectionState() {
-        cancelOps()
-        lastHeardFromAt = 0L
-        isConnected = false
-        isConnecting = false
-        readySince = 0L
-        linkUpAtMs = 0L
-        discoveryStarted = false
-        servicesResolved = false
-        linkClaimed = false
-        gatt = null
-        writeCharacteristic = null
-        notifyCharacteristic = null
-        authWriteCharacteristic = null
-        authNotifyCharacteristic = null
-        // Release a write that will never complete, so its caller fails at once.
-        writeDone?.countDown()
-    }
-
-    private val gattCallback = object : BluetoothGattCallback() {
+        private fun enqueue(kind: String, timeoutMs: Long = GATT_OP_TIMEOUT_MS, issue: () -> Boolean) =
+            link.ops.enqueue(kind, timeoutMs, issue)
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (!mine("state $newState")) return
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED    -> {
-                    if (!claimLinkUp()) {
+                    if (!advance(link, LinkState.CONNECTING, LinkState.LINK_UP) { linkUpAtMs = System.currentTimeMillis() }) {
                         aapsLogger.debug(
                             LTag.PUMPBTCOMM,
                             "ATC3: connected again on a link already being set up, leaving it alone"
@@ -595,11 +527,10 @@ class Atc3BLE @Inject constructor(
                         trace.event(Atc3TraceCat.BLE, "gatt_connected_again", "ms" to trace.since(linkUpAtMs))
                         return
                     }
-                    linkUpAtMs = System.currentTimeMillis()
                     aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: connected, asking for a larger MTU")
                     trace.event(Atc3TraceCat.BLE, "gatt_connected", "ms" to trace.since(connectingSince))
                     // Asked before discovery, which starts from onMtuChanged, so that nothing lands in the middle of it.
-                    enqueueOp(OP_MTU) { gatt.requestMtu(WANTED_MTU) }
+                    enqueue(OP_MTU) { gatt.requestMtu(WANTED_MTU) }
                 }
 
                 BluetoothProfile.STATE_DISCONNECTED -> {
@@ -609,50 +540,47 @@ class Atc3BLE @Inject constructor(
                         "status" to status,
                         "linkMs" to if (readySince == 0L) -1 else trace.since(readySince)
                     )
-                    endConnection("stack status $status")
+                    endConnection("stack status $status", Ending.STACK_DROPPED, link)
                 }
             }
         }
 
         /** A bigger MTU brings the pump's answers whole; whatever is granted, the setup goes on. */
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            if (!completeOp(OP_MTU, status)) return
+            if (!mine("mtu")) return
+            if (!link.ops.complete(OP_MTU, status)) return
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: MTU is now $mtu")
             } else {
                 aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: MTU request failed with status $status, staying at the default")
             }
             trace.event(Atc3TraceCat.BLE, "mtu", "mtu" to mtu, "status" to status)
-            if (!claimDiscovery()) {
-                // A second MTU callback for the one request, from another client on the link: discovering again
-                // would put everything in flight twice, see [discoveryStarted].
-                trace.event(Atc3TraceCat.BLE, "mtu_repeat")
-                return
-            }
-            discoverServices(gatt)
+            // A repeated MTU callback is refused by the step queue above; this fails only for a link that ended meanwhile.
+            if (!advance(link, LinkState.LINK_UP, LinkState.DISCOVERING)) return
+            aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: discovering services")
+            // The one setup step that can be slow.
+            enqueue(OP_DISCOVER, DISCOVER_TIMEOUT_MS) { gatt.discoverServices() }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (!completeOp(OP_DISCOVER, status)) return
+            if (!mine("discovered")) return
+            if (!link.ops.complete(OP_DISCOVER, status)) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: service discovery failed with status $status")
                 trace.event(Atc3TraceCat.BLE, "discovery_failed", "status" to status)
-                endConnection("discovery status $status")
+                endConnection("discovery status $status", link = link)
                 return
             }
-            if (!claimServices()) {
-                trace.event(Atc3TraceCat.BLE, "discovery_repeat")
-                return
+            val notify = gatt.getService(GattAttributes.serviceNotifyUuid)?.getCharacteristic(GattAttributes.characteristicNotifyUuid)
+            val write = gatt.getService(GattAttributes.serviceWriteUuid)?.getCharacteristic(GattAttributes.characteristicWriteUuid)
+            val authWrite = gatt.getService(GattAttributes.serviceAuthUuid)?.getCharacteristic(GattAttributes.characteristicAuthWriteUuid)
+            val authNotify = gatt.getService(GattAttributes.serviceAuthUuid)?.getCharacteristic(GattAttributes.characteristicAuthNotifyUuid)
+            val discovered = advance(link, LinkState.DISCOVERING, LinkState.AUTHORISING) {
+                link.notifyCharacteristic = notify
+                link.writeCharacteristic = write
+                link.authWriteCharacteristic = authWrite
             }
-            notifyCharacteristic = gatt
-                .getService(GattAttributes.serviceNotifyUuid)
-                ?.getCharacteristic(GattAttributes.characteristicNotifyUuid)
-            writeCharacteristic = gatt
-                .getService(GattAttributes.serviceWriteUuid)
-                ?.getCharacteristic(GattAttributes.characteristicWriteUuid)
-
-            val notify = notifyCharacteristic
-            val write = writeCharacteristic
+            if (!discovered) return
             if (notify == null || write == null) {
                 aapsLogger.error(
                     LTag.PUMPBTCOMM,
@@ -667,26 +595,18 @@ class Atc3BLE @Inject constructor(
                         )
                     }
                 }
-                endConnection("characteristics missing")
+                endConnection("characteristics missing", link = link)
                 return
             }
-            authWriteCharacteristic = gatt
-                .getService(GattAttributes.serviceAuthUuid)
-                ?.getCharacteristic(GattAttributes.characteristicAuthWriteUuid)
-            authNotifyCharacteristic = gatt
-                .getService(GattAttributes.serviceAuthUuid)
-                ?.getCharacteristic(GattAttributes.characteristicAuthNotifyUuid)
-
-            val authNotify = authNotifyCharacteristic
-            // No authorisation service: firmware older than the password, nothing can protect this link.
-            if (authNotify == null || authWriteCharacteristic == null) linkProtection = Atc3LinkProtection.UNSUPPORTED
             // The password first: until the pump has one, it refuses the data subscription.
-            if (authNotify != null && authWriteCharacteristic != null) {
+            if (authNotify != null && authWrite != null) {
                 aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: characteristics resolved, authorising")
                 subscribe(gatt, authNotify, OP_SUBSCRIBE_AUTH)
                 return
             }
-            // A pump without the service cannot be asking for a password.
+            // No authorisation service: firmware older than the password, nothing can protect this link,
+            // and a pump without the service cannot be asking for a password.
+            if (!advance(link, LinkState.AUTHORISING, LinkState.SUBSCRIBING) { linkProtection = Atc3LinkProtection.UNSUPPORTED }) return
             aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: no authorisation service on this pump, connecting without one")
             trace.event(Atc3TraceCat.BLE, "auth_absent")
             aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: characteristics resolved, subscribing")
@@ -694,11 +614,12 @@ class Atc3BLE @Inject constructor(
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (!mine("descriptor")) return
             val subscribed = descriptor.characteristic?.uuid
             val kind =
                 if (subscribed == GattAttributes.characteristicAuthNotifyUuid) OP_SUBSCRIBE_AUTH
                 else OP_SUBSCRIBE_DATA
-            if (!completeOp(kind, status)) return
+            if (!link.ops.complete(kind, status)) return
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 // The pump asking for a password, said by name.
                 if (subscribed == GattAttributes.characteristicNotifyUuid && status == GATT_WRITE_NOT_PERMITTED) {
@@ -707,28 +628,31 @@ class Atc3BLE @Inject constructor(
                         "ATC3: the pump refused to enable notifications, it is asking for a Bluetooth password"
                     )
                     trace.event(Atc3TraceCat.BLE, "auth", "ok" to false, "why" to "not_permitted")
-                    endConnection("password required")
+                    endConnection("password required", link = link)
                     callback?.onAuthenticationRejected()
                     return
                 }
                 aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: subscribing to notifications failed, status $status")
-                endConnection("subscribe status $status")
+                endConnection("subscribe status $status", link = link)
                 return
             }
             if (subscribed == GattAttributes.characteristicAuthNotifyUuid) {
                 writePassword(gatt)
                 return
             }
-            watchdog?.cancel(false)
-            watchdog = null
-            isConnecting = false
-            isConnected = true
-            readySince = trace.now()
-            // A new link has had no heartbeat yet: its silence is counted from now.
-            noteHeardFrom()
+            val ready = advance(link, LinkState.SUBSCRIBING, LinkState.READY) {
+                readySince = trace.now()
+                // A new link has had no heartbeat yet: its silence is counted from now.
+                noteHeardFrom()
+            }
+            if (!ready) return
+            link.watchdog?.cancel(false)
             aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: ready")
             trace.event(Atc3TraceCat.BLE, "ready", "ms" to trace.since(connectingSince))
-            callback?.onConnected()
+            // Told only while the link is still the one that came up: an end in between is told instead.
+            synchronized(reportLock) {
+                if (isCurrent(link) && state == LinkState.READY) callback?.onConnected()
+            }
         }
 
         @Deprecated("Deprecated in Android 13, kept for older devices")
@@ -747,6 +671,7 @@ class Atc3BLE @Inject constructor(
 
         /** One notification, by the characteristic that sent it: the password's answer is not a frame. */
         private fun received(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+            if (!mine("notification")) return
             if (characteristic.uuid == GattAttributes.characteristicAuthNotifyUuid) {
                 onAuthAnswer(gatt, value)
                 return
@@ -764,17 +689,20 @@ class Atc3BLE @Inject constructor(
                     "ATC3: the pump refused the Bluetooth password, answer ${answer?.let { "0x%02X".format(it) } ?: "none"}"
                 )
                 trace.event(Atc3TraceCat.BLE, "auth", "ok" to false, "answer" to answer?.toInt())
-                endConnection("password refused")
+                endConnection("password refused", link = link)
                 callback?.onAuthenticationRejected()
                 return
             }
             // 000000 is the pump's own "no password": a link it guards is not protected.
             val unprotected = password == Atc3BtPassword.NONE
-            linkProtection = if (unprotected) Atc3LinkProtection.UNPROTECTED else Atc3LinkProtection.PROTECTED
+            val accepted = advance(link, LinkState.AUTHORISING, LinkState.SUBSCRIBING) {
+                linkProtection = if (unprotected) Atc3LinkProtection.UNPROTECTED else Atc3LinkProtection.PROTECTED
+            }
+            if (!accepted) return
             trace.event(Atc3TraceCat.BLE, "auth", "ok" to true, "protected" to !unprotected)
-            val notify = notifyCharacteristic
+            val notify = link.notifyCharacteristic
             if (notify == null) {
-                endConnection("characteristics missing")
+                endConnection("characteristics missing", link = link)
                 return
             }
             aapsLogger.debug(LTag.PUMPBTCOMM, "ATC3: password accepted, subscribing")
@@ -782,99 +710,97 @@ class Atc3BLE @Inject constructor(
         }
 
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            if (!mine("write")) return
             // The password's outcome arrives as a notification: this write releases no exchange.
             if (characteristic.uuid == GattAttributes.characteristicAuthWriteUuid) {
                 // The stack is busy until this write is reported, and the step after the password needs it free.
-                if (!completeOp(OP_WRITE_AUTH, status)) return
+                if (!link.ops.complete(OP_WRITE_AUTH, status)) return
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: could not send the Bluetooth password, status $status")
                     trace.event(Atc3TraceCat.BLE, "auth", "ok" to false, "why" to "write status $status")
-                    endConnection("password write status $status")
+                    endConnection("password write status $status", link = link)
                 }
                 return
             }
-            writeSucceeded = status == BluetoothGatt.GATT_SUCCESS
-            if (!writeSucceeded) {
+            val succeeded = status == BluetoothGatt.GATT_SUCCESS
+            if (!succeeded) {
                 aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: characteristic write failed, status $status")
                 callback?.onSendError("write status $status")
             }
-            writeDone?.countDown()
+            writeReported(link, succeeded)
+        }
+
+        /** Present the Bluetooth password, from the callback chain; the pump answers with a notification. */
+        private fun writePassword(gatt: BluetoothGatt) {
+            val characteristic = link.authWriteCharacteristic
+            val configured = password
+            if (characteristic == null) {
+                endConnection("characteristics missing", link = link)
+                return
+            }
+            val value = runCatching { Atc3BtPassword.authValue(configured) }.getOrElse {
+                aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the configured Bluetooth password is unusable, ${it.message}")
+                endConnection("password unusable", link = link)
+                callback?.onAuthenticationRejected()
+                return
+            }
+            enqueue(OP_WRITE_AUTH) {
+                val status = issueWrite(gatt, characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                if (status != BluetoothStatusCodes.SUCCESS) trace.event(Atc3TraceCat.BLE, "auth_write", "ok" to false, "status" to status)
+                status == BluetoothStatusCodes.SUCCESS
+            }
+        }
+
+        private fun subscribe(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, kind: String) {
+            val descriptor = characteristic.getDescriptor(GattAttributes.characteristicConfigDescriptor)
+            if (descriptor == null) {
+                aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: notification descriptor missing")
+                endConnection("notification descriptor missing", link = link)
+                return
+            }
+            val value =
+                if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)
+                    BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                else
+                    BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+
+            enqueue(kind) {
+                gatt.setCharacteristicNotification(characteristic, true)
+                // A descriptor write the stack does not start gets no callback: the answer here is the whole question.
+                @Suppress("DEPRECATION")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    gatt.writeDescriptor(descriptor, value) == BluetoothStatusCodes.SUCCESS
+                } else {
+                    descriptor.value = value
+                    gatt.writeDescriptor(descriptor)
+                }
+            }
         }
     }
 
-    /** Present the Bluetooth password, from the callback chain; the pump answers with a notification. */
-    private fun writePassword(gatt: BluetoothGatt) {
-        val characteristic = authWriteCharacteristic
-        val configured = password
-        if (characteristic == null) {
-            endConnection("characteristics missing")
-            return
-        }
-        val value = runCatching { Atc3BtPassword.authValue(configured) }.getOrElse {
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: the configured Bluetooth password is unusable, ${it.message}")
-            endConnection("password unusable")
-            callback?.onAuthenticationRejected()
-            return
-        }
-        enqueueOp(OP_WRITE_AUTH) { issueAuthWrite(gatt, characteristic, value) }
-    }
-
-    private fun issueAuthWrite(
-        gatt: BluetoothGatt,
-        characteristic: BluetoothGattCharacteristic,
-        value: ByteArray
-    ): Boolean =
-        try {
+    /**
+     * Ask the stack to write [value], for the data and the password alike.
+     *
+     * @return [BluetoothStatusCodes.SUCCESS] when the stack took the write, otherwise why it did not:
+     * its status, [REFUSAL_UNNUMBERED] from a stack too old to give one, or [REFUSAL_PERMISSION]
+     */
+    private fun issueWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, writeType: Int): Int {
+        val status = try {
             @Suppress("DEPRECATION")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val status =
-                    gatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-                if (status != BluetoothStatusCodes.SUCCESS) {
-                    aapsLogger.error(
-                        LTag.PUMPBTCOMM, "ATC3: an authorisation write was refused by the Bluetooth stack, status $status"
-                    )
-                    trace.event(Atc3TraceCat.BLE, "auth_write", "ok" to false, "status" to status)
-                }
-                status == BluetoothStatusCodes.SUCCESS
+                gatt.writeCharacteristic(characteristic, value, writeType)
             } else {
-                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                characteristic.writeType = writeType
                 characteristic.value = value
-                val ok = gatt.writeCharacteristic(characteristic)
-                if (!ok) {
-                    aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: an authorisation write was refused by the Bluetooth stack")
-                    trace.event(Atc3TraceCat.BLE, "auth_write", "ok" to false, "status" to REFUSAL_UNNUMBERED)
-                }
-                ok
+                if (gatt.writeCharacteristic(characteristic)) BluetoothStatusCodes.SUCCESS else REFUSAL_UNNUMBERED
             }
         } catch (e: SecurityException) {
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: missing Bluetooth permission on an authorisation write", e)
-            trace.event(Atc3TraceCat.BLE, "auth_write", "ok" to false, "status" to REFUSAL_PERMISSION)
-            false
+            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: missing Bluetooth permission on a write", e)
+            return REFUSAL_PERMISSION
         }
-
-    private fun subscribe(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, kind: String) {
-        val descriptor = characteristic.getDescriptor(GattAttributes.characteristicConfigDescriptor)
-        if (descriptor == null) {
-            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: notification descriptor missing")
-            endConnection("notification descriptor missing")
-            return
+        if (status != BluetoothStatusCodes.SUCCESS) {
+            aapsLogger.error(LTag.PUMPBTCOMM, "ATC3: a write to ${characteristic.uuid} was refused by the Bluetooth stack, status $status")
         }
-        val value =
-            if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)
-                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-            else
-                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-
-        enqueueOp(kind) {
-            gatt.setCharacteristicNotification(characteristic, true)
-            // A descriptor write the stack does not start gets no callback: the answer here is the whole question.
-            @Suppress("DEPRECATION")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                gatt.writeDescriptor(descriptor, value) == BluetoothStatusCodes.SUCCESS
-            } else {
-                descriptor.value = value
-                gatt.writeDescriptor(descriptor)
-            }
-        }
+        return status
     }
 }

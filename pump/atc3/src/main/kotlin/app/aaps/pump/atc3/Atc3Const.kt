@@ -13,7 +13,7 @@ object Atc3Const {
     const val HEARTBEAT_OBJECT: Byte = HEARTBEAT_PERIOD_MINUTES.toByte()
 
     /** The driver's version, on its screen and in the log at start: the date of the change and its number that day, raised with every change. */
-    const val DRIVER_VERSION = "2026.10.07.15"
+    const val DRIVER_VERSION = "2026.10.09.2"
 
     /** The firmware from which the pump has a Bluetooth password; older firmware is run under a standing warning. */
     val PASSWORD_FIRMWARE = listOf(1, 1, 1, 0)
@@ -51,20 +51,11 @@ object Atc3Const {
     /** How many times to re-read the status while waiting for a control command to take effect. */
     const val EFFECT_POLL_ATTEMPTS = 8
 
-    /**
-     * How far apart two of the driver's own boluses start, so that their records fall in different
-     * minutes and can be told apart. Not a therapy limit; boluses given elsewhere are not spaced.
-     */
-    const val BOLUS_SPACING_MS = 60_000L
-
     /** How old a Status V1 report may be: it is rebuilt once a minute. */
     const val STATUS_SNAPSHOT_AGE_MS = 60 * 1000L
 
     /** How far back a record may be and still be imported, milliseconds. */
     const val RECONCILE_MAX_AGE_MS = 24 * 60 * 60 * 1000L
-
-    /** How many records the ledger remembers. The pump returns at most ten per answer. */
-    const val SEEN_CAPACITY = 40
 
     /** How far ahead a temporary basal the driver did not start is written while its length is not known: longer than AAPS's slowest poll. */
     const val TBR_HORIZON_MS = 20 * 60 * 1000L
@@ -90,12 +81,6 @@ object Atc3Const {
 
     /** Up to this far apart the clock is put right at once and the user told; from here on nothing is written and the loop stops. */
     const val CLOCK_MAX_CORRECTION_MS = 55 * 60 * 1000L
-
-    /**
-     * How old the driver's knowledge of the pump's boluses may be before a command reads it again: under
-     * the loop's cycle, so each cycle reads once.
-     */
-    const val HISTORY_FRESH_MS = 4 * 60 * 1000L
 
     /** How old the knowledge of what the pump delivers may be before the loop's decision asks for a read. */
     const val STATUS_FRESH_MS = 4 * 60 * 1000L

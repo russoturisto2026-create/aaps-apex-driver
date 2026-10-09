@@ -1,7 +1,6 @@
 package app.aaps.pump.atc3.keys
 
 import app.aaps.core.keys.interfaces.BooleanPreferenceKey
-import app.aaps.pump.atc3.basal.Atc3BasalPeriod
 import app.aaps.pump.atc3.trace.Atc3Trace
 
 enum class Atc3BooleanKey(
@@ -27,7 +26,4 @@ enum class Atc3BooleanKey(
      * watched by the pump's heartbeat. On by default; off for a phone that handles a long link badly.
      */
     HoldLink("atc3_hold_link", true),
-
-    /** Write each passed half hour as the pump's count gives it, see [app.aaps.pump.atc3.basal.Atc3BasalPeriod]; off keeps the rows of the commands. */
-    ExactBasal("atc3_exact_basal", false),
 }

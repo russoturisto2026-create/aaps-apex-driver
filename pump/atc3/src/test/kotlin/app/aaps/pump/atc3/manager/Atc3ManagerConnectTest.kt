@@ -1,5 +1,7 @@
 package app.aaps.pump.atc3.manager
 
+import app.aaps.core.interfaces.logging.AAPSLogger
+import app.aaps.core.interfaces.logging.LTag
 import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.pump.atc3.Atc3Const
 import app.aaps.pump.atc3.R
@@ -43,6 +45,7 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
     private lateinit var exchange: Atc3Exchange
     private lateinit var bolusDelivery: Atc3BolusDelivery
     private lateinit var connection: Atc3Connection
+    private lateinit var trace: Atc3Trace
 
     @BeforeEach
     fun setup() {
@@ -53,7 +56,10 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
         whenever(preferences.get(Atc3BooleanKey.Trace)).thenReturn(false)
         // No change has been made, so there is no second candidate to fall back to.
         whenever(preferences.get(Atc3StringKey.Atc3BtPasswordAlternate)).thenReturn("")
-        val trace = Atc3Trace(aapsLogger, preferences)
+        whenever(atc3BLE.hasBluetooth).thenReturn(true)
+        whenever(atc3BLE.isBluetoothOn).thenReturn(true)
+        whenever(atc3BLE.isValidAddress(any())).thenReturn(true)
+        trace = Atc3Trace(aapsLogger, preferences)
         connection = Atc3Connection(aapsLogger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
         exchange = Atc3Exchange(aapsLogger, preferences, atc3BLE, trace, connection)
         bolusDelivery = Atc3BolusDelivery(aapsLogger, dateUtil, exchange)
@@ -130,6 +136,107 @@ class Atc3ManagerConnectTest : TestBaseWithProfile() {
 
         verify(atc3BLE).disconnect()
         verify(atc3BLE, never()).write(any())
+    }
+
+    /**
+     * The queue asks once a second. Once the driver has given up, each of those asks is refused
+     * quietly: no new session is begun for a pump that is not asked anything.
+     */
+    @Test
+    fun `a password given up on is refused without a session for each ask`() {
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(0L)
+        whenever(atc3BLE.connect(any())).thenReturn(true)
+        repeat(Atc3Const.AUTH_MAX_ATTEMPTS) {
+            connection.connect("Connection needed")
+            connection.onAuthenticationRejected()
+        }
+        val sessions = trace.sessionId
+
+        repeat(3) { assertThat(connection.connect("Connection needed")).isFalse() }
+
+        assertThat(trace.sessionId).isEqualTo(sessions)
+        verify(atc3BLE, times(Atc3Const.AUTH_MAX_ATTEMPTS)).connect(any())
+    }
+
+    /**
+     * With the phone's Bluetooth off, some phones still let a link to the pump come up and fail it at
+     * the first write. Nothing is tried, no session is begun, and the user is told once.
+     */
+    @Test
+    fun `while Bluetooth is off nothing is connected to, and the user is told once`() {
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(0L)
+        whenever(atc3BLE.connect(any())).thenReturn(true)
+        whenever(atc3BLE.isBluetoothOn).thenReturn(false)
+        whenever(rh.gs(R.string.atc3_bluetooth_off)).thenReturn("bluetooth off")
+        val sessions = trace.sessionId
+
+        assertThat(connection.connect("Connection needed")).isFalse()
+        assertThat(connection.connect("Connection needed")).isFalse()
+
+        verify(atc3BLE, never()).connect(any())
+        assertThat(trace.sessionId).isEqualTo(sessions)
+        verify(uiInteraction, times(1)).addNotification(any(), eq("bluetooth off"), any())
+    }
+
+    @Test
+    fun `Bluetooth off during a wait is told at once, not when the wait is over`() {
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(5_000L)
+        whenever(atc3BLE.isBluetoothOn).thenReturn(false)
+        whenever(rh.gs(R.string.atc3_bluetooth_off)).thenReturn("bluetooth off")
+
+        connection.connect("Connection needed")
+
+        verify(uiInteraction, times(1)).addNotification(any(), eq("bluetooth off"), any())
+    }
+
+    /** Bluetooth on again: the link is asked for, and the next time it goes off the user is told again. */
+    @Test
+    fun `Bluetooth on again connects, and off again is told again`() {
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(0L)
+        whenever(atc3BLE.connect(any())).thenReturn(true)
+        whenever(rh.gs(R.string.atc3_bluetooth_off)).thenReturn("bluetooth off")
+
+        whenever(atc3BLE.isBluetoothOn).thenReturn(false)
+        connection.connect("Connection needed")
+        whenever(atc3BLE.isBluetoothOn).thenReturn(true)
+        assertThat(connection.connect("Connection needed")).isTrue()
+        whenever(atc3BLE.isBluetoothOn).thenReturn(false)
+        connection.connect("Connection needed")
+
+        verify(atc3BLE, times(1)).connect(any())
+        verify(uiInteraction, times(2)).addNotification(any(), eq("bluetooth off"), any())
+    }
+
+    /**
+     * The queue asks once a second while it waits. A reason to refuse is logged when it begins, not at
+     * every ask, and again when it comes back after an ask that went to the pump.
+     */
+    @Test
+    fun `a refusal is logged once for each time it begins`() {
+        val logger = mock<AAPSLogger>()
+        val quiet = Atc3Connection(logger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        whenever(atc3BLE.connect(any())).thenReturn(true)
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(5_000L)
+
+        repeat(3) { quiet.connect("Connection needed") }
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(0L)
+        quiet.connect("Connection needed")
+        whenever(atc3BLE.backoffRemainingMs).thenReturn(5_000L)
+        repeat(3) { quiet.connect("Connection needed") }
+
+        verify(logger, times(2)).debug(eq(LTag.PUMP), eq("ATC3: waiting before trying the link again"))
+        verify(logger, times(1)).debug(eq(LTag.PUMP), eq("ATC3: connect, reason Connection needed"))
+    }
+
+    @Test
+    fun `a missing serial is an error said once, not at every ask`() {
+        val logger = mock<AAPSLogger>()
+        val quiet = Atc3Connection(logger, rxBus, preferences, atc3BLE, trace, uiInteraction, rh, mock())
+        whenever(preferences.get(Atc3StringKey.Atc3SerialNumber)).thenReturn("")
+
+        repeat(3) { assertThat(quiet.connect("Connection needed")).isFalse() }
+
+        verify(logger, times(1)).error(eq(LTag.PUMP), any<String>())
     }
 
     /** Entering a different password is a different question, and it gets its own ten tries. */

@@ -3,275 +3,117 @@ package app.aaps.pump.atc3.history
 import app.aaps.pump.atc3.Atc3Const
 import app.aaps.pump.atc3.protocol.Atc3BolusHistory
 import app.aaps.pump.atc3.protocol.Atc3BolusRecord
-import app.aaps.pump.atc3.protocol.Atc3Protocol
-import java.util.IdentityHashMap
-import kotlin.math.roundToInt
+import app.aaps.pump.atc3.protocol.Atc3StatusV1
 
-/** What is to be done about one bolus record. */
-sealed interface Atc3BolusAction {
-
-    /** The record is a bolus AAPS is counting: its row becomes the real one, dated by the record's stamp. */
-    data class ResolvePending(
-        val pending: PendingBolus,
-        val timestamp: Long,
-        val units: Double,
-        val pumpId: Long,
-        val carriesExtendedPart: Boolean
-    ) : Atc3BolusAction
-
-    /** A bolus nobody told AAPS about: given on the pump itself or from another device. */
-    data class Import(
-        val timestamp: Long,
-        val units: Double,
-        val pumpId: Long,
-        val carriesExtendedPart: Boolean
-    ) : Atc3BolusAction
-
-    /** A row brought to the pump's record: ours closed on its completion frame, or one whose amount the pump has since corrected. */
-    data class Rewrite(
-        val timestamp: Long,
-        val units: Double,
-        val pumpId: Long
-    ) : Atc3BolusAction
-
-    /**
-     * A bolus the pump accepted and never wrote a record of: a record of a later minute is already there.
-     * The row is given up and the user told, rather than closed at a figure watched off progress frames.
-     */
-    data class DropPending(
-        val pending: PendingBolus,
-        val pumpId: Long
-    ) : Atc3BolusAction
-
-    /** The pump was asked and still has no record for this bolus; count the attempt. */
-    data class CountAttempt(val pending: PendingBolus) : Atc3BolusAction
-
-    /** Nothing to record, but the record is now accounted for and will not be looked at again. */
-    data class Consume(val pumpId: Long, val reason: String) : Atc3BolusAction
-}
+/** A bolus row AAPS holds of this pump, as the rows of a minute are compared: when, and how much in the pump's steps. */
+data class Atc3BolusRow(val timestamp: Long, val rawUnits: Int)
 
 /**
- * Decides for every record the pump returned whether AAPS already has it: the bolus AAPS is waiting
- * to confirm, another's to import, or one counted before.
+ * One read of the pump's bolus journal against the rows AAPS holds, one minute at a time.
  *
- * A record is a bolus of ours when it asked for exactly our dose, delivered no more, and sits in the
- * minute ours started in or one either side, for the pump's clock. Records are paired first in,
- * first out: our boluses oldest first, each taking the oldest free record it can be, since the pump
- * writes them in the order it delivered them.
+ * A record has no number; it is known by the minute its bolus started in and by its doses. So in
+ * each minute, as many records of a dose as AAPS has rows of are the ones AAPS has, and the rest are
+ * written. Nothing is remembered about the records: the rows are the memory, and a row the user
+ * deleted is still a row. The pump's past, from before the import boundary, records older than a day
+ * and empty records are passed over. An extended or dual bolus becomes no row: the loop cannot count
+ * it, so the user is told to enter it.
  */
 object Atc3BolusReconciler {
 
-    /**
-     * @param clockShiftMinutes where our boluses' records sat against their starts: 0, -1 or +1, or null when none of ours was matched
-     */
+    /** A row to write; [expected] is the bolus of ours this is the record of, null for anyone else's. */
+    data class Write(val timestamp: Long, val units: Double, val pumpId: Long, val expected: ExpectedBolus?)
+
+    /** An extended or dual bolus the pump gave, which no row carries. */
+    data class Extended(val timestamp: Long, val units: Double)
+
     data class Outcome(
-        val actions: List<Atc3BolusAction>,
+        val writes: List<Write>,
+        val extended: List<Extended>,
         val ledger: Atc3HistoryLedger,
-        val clockShiftMinutes: Int? = null
+        /** Rows AAPS holds beyond the pump's records of their minutes, for the trace. */
+        val rowsBeyond: Int,
+        /** Where our boluses' records sat against their starts, minutes, or null when none was found. */
+        val clockShiftMinutes: Int?,
+        /** The records passed over as the pump's past, older than a day, or empty: named in the log, nothing else. */
+        val skipped: List<Atc3BolusRecord> = emptyList()
     )
 
     /**
-     * @param records what the pump returned, in arrival order
-     * @param recordCount the count the frames declared, for diagnostics
+     * @param records what the pump returned, in any order
+     * @param rows the rows AAPS holds of this pump over the records' minutes, deleted ones included
      * @param phoneNow the phone's clock now
      * @param earliestAcceptedMs the moment AAPS adopted this pump: anything older it refuses
      */
     fun reconcile(
         records: List<Atc3BolusRecord>,
-        recordCount: Int,
+        rows: List<Atc3BolusRow>,
         ledger: Atc3HistoryLedger,
         phoneNow: Long,
-        earliestAcceptedMs: Long = 0L
+        earliestAcceptedMs: Long
     ): Outcome {
-        var current = ledger.withRecordCount(recordCount)
-        val actions = ArrayList<Atc3BolusAction>()
+        var current = ledger
+        if (!current.firstPassDone) {
+            // What the pump held before AAPS adopted it is its past.
+            val from = if (earliestAcceptedMs > 0L) earliestAcceptedMs else phoneNow
+            current = current.withWatermark(Atc3StatusV1.wallClockUtcSeconds(from), from)
+        }
+        val (skipped, fresh) = records.partition { isPast(it, current, phoneNow, earliestAcceptedMs) }
+        val extended = fresh.filter { it.carriesExtendedPart }.map { Extended(minuteStartOf(it.timestamp), it.totalDeliveredUnits) }
 
-        // Oldest first: AAPS needs the events in order.
-        val ordered = records.sortedBy { it.pumpClockUtcSeconds }
-        val firstPass = !current.firstPassDone
-        // Decided for the whole read first: which were counted, and which are ours.
-        val seenPairs = current.pairWithSeen(ordered)
-        val pairs = pairUp(ordered.filter { !seenPairs.containsKey(it) }, ownDoses(current))
-
-        for (record in ordered) {
-            val timestamp = record.timestamp
-            val alreadySeen = seenPairs[record]
-
-            if (alreadySeen != null) {
-                if (alreadySeen.fingerprint != record.fingerprint) {
-                    actions.add(Atc3BolusAction.Rewrite(timestamp, record.aapsUnits, alreadySeen.pumpId))
-                    current = current.withSeen(
-                        alreadySeen.copy(fingerprint = record.fingerprint, pumpClockUtcSeconds = record.pumpClockUtcSeconds)
-                    )
+        val writes = ArrayList<Write>()
+        var expected = current.expected
+        val shifts = ArrayList<Int>()
+        var rowsBeyond = 0
+        for ((minute, ofMinute) in fresh.filterNot { it.carriesExtendedPart }.groupBy { minuteStartOf(it.timestamp) }.toSortedMap()) {
+            val held = rows.filter { it.timestamp in minute until minute + 60_000L }.map { it.rawUnits }.toMutableList()
+            var next = held.size
+            for (record in ofMinute) {
+                if (held.remove(record.rawDelivered)) continue
+                val own = expected.firstOrNull { fits(record, it) }
+                if (own != null) {
+                    expected = expected - own
+                    shifts.add((minuteOf(record.pumpClockUtcSeconds) - minuteOf(own.startUtcSeconds)).toInt())
                 }
-                continue
+                writes.add(Write(minute, record.deliveredUnits, minute + next++, own))
             }
-
-            val dose = pairs[record]
-            val pending = dose?.pending
-            val settled = dose?.settled
-            // Our row takes the record's stamp, whatever minute: the record is the pump's past. The minute it
-            // sits off is the clock's miss, measured apart.
-
-            if (pending != null) {
-                val pumpId = current.assignPumpId(record)
-                actions.add(
-                    Atc3BolusAction.ResolvePending(
-                        pending, record.timestamp, record.aapsUnits, pumpId, record.carriesExtendedPart
-                    )
-                )
-                current = current.withoutPending(pending.temporaryId)
-                    .withSeen(SeenBolus(pumpId, record.pumpClockUtcSeconds, record.fingerprint))
-                continue
-            }
-
-            if (settled != null) {
-                // Ours closed on its completion frame: already in AAPS under the record's id, now dated by it.
-                actions.add(Atc3BolusAction.Rewrite(record.timestamp, record.aapsUnits, settled.pumpId))
-                current = current.withoutSettled(settled.startedAtMs)
-                    .withSeen(SeenBolus(settled.pumpId, record.pumpClockUtcSeconds, record.fingerprint))
-                continue
-            }
-
-            val pumpId = current.assignPumpId(record)
-            when {
-                record.isEmptyRecord      ->
-                    actions.add(Atc3BolusAction.Consume(pumpId, "record carries no amount"))
-
-                firstPass                 ->
-                    actions.add(Atc3BolusAction.Consume(pumpId, "history the pump already held"))
-
-                timestamp < earliestAcceptedMs ->
-                    // AAPS refuses anything from before it adopted this pump.
-                    actions.add(Atc3BolusAction.Consume(pumpId, "older than the moment AAPS adopted this pump"))
-
-                isTooOld(record, timestamp, current, phoneNow) ->
-                    actions.add(Atc3BolusAction.Consume(pumpId, "older than the watermark"))
-
-                else                      ->
-                    actions.add(
-                        Atc3BolusAction.Import(timestamp, record.aapsUnits, pumpId, record.carriesExtendedPart)
-                    )
-            }
-            current = current.withSeen(SeenBolus(pumpId, record.pumpClockUtcSeconds, record.fingerprint))
+            rowsBeyond += held.size
         }
-
-        if (ordered.isNotEmpty()) {
-            val newestRecord = ordered.last()
-            val newest = newestRecord.pumpClockUtcSeconds
-            if (firstPass || newest > current.importFromUtcSeconds) {
-                current = current.withWatermark(newest, newestRecord.timestamp)
-            }
-        } else if (firstPass) {
-            current = current.withWatermark(current.importFromUtcSeconds, phoneNow)
-        }
-
-        // A bolus of ours waits for its record however long: an alarm can hold it back, and the pump writes
-        // nothing else meanwhile. A record of a later minute, past the clock's slack, means ours will never come.
-        val newestMinute = (ordered.map { it.pumpClockUtcSeconds } + current.seen.map { it.pumpClockUtcSeconds })
-            .maxOrNull()?.let { minuteOf(it) }
-        for (pending in current.pending) {
-            val provenAbsent = newestMinute != null && newestMinute > minuteOf(pending.startUtcSeconds) + 1
-            if (!provenAbsent) {
-                actions.add(Atc3BolusAction.CountAttempt(pending))
-                current = current.withPendingAttempt(pending.temporaryId, pending.confirmAttempts + 1)
-                continue
-            }
-            actions.add(
-                Atc3BolusAction.DropPending(
-                    pending,
-                    Atc3PumpId.of(pending.startUtcSeconds * 1000L, Atc3PumpId.KIND_RETRACTION)
-                )
-            )
-            // Nothing is kept of it: the pump holds no record of this bolus and will write none.
-            current = current.withoutPending(pending.temporaryId)
-        }
-
-        // Kept only as long as its record could still turn up.
-        current = current.copy(
-            settled = current.settled.filter { phoneNow - it.settledAtMs < Atc3Const.RECONCILE_MAX_AGE_MS }
-        )
-
-        val shifts = pairs.entries.map { (record, dose) -> (minuteOf(record.pumpClockUtcSeconds) - dose.startMinute).toInt() }
+        // A record of a later minute than ours could sit in says ours came, or never will: the pump writes
+        // in order, and under an alarm it writes nothing at all.
+        val latestMinute = records.maxOfOrNull { minuteOf(it.pumpClockUtcSeconds) }
+        if (latestMinute != null) expected = expected.filter { minuteOf(it.startUtcSeconds) + 1 >= latestMinute }
+        current = current.copy(expected = expected)
         val clockShift = if (shifts.isEmpty()) null else shifts.firstOrNull { it != 0 } ?: 0
-        return Outcome(actions, current, clockShift)
+        return Outcome(writes, extended, current, rowsBeyond, clockShift, skipped)
     }
 
     /**
-     * True when the pump holds records this answer did not carry, and the oldest it carried is newer
-     * than the import boundary: then what lies between may be insulin AAPS never had. Not before the
-     * first pass, which imports nothing.
+     * True when the pump holds records this answer left out: the newest record of the last answer is
+     * not in it, so ten or more came since, or there was no answer yet. An answer that holds everything
+     * the pump has leaves nothing out.
      */
-    fun recordsMissing(history: Atc3BolusHistory, ledger: Atc3HistoryLedger): Boolean {
-        if (!ledger.firstPassDone) return false
-        if (history.records.isEmpty()) return false
-        if (history.recordCount <= history.records.size) return false
-        val oldestSent = history.records.minOf { it.pumpClockUtcSeconds }
-        return oldestSent > ledger.importFromUtcSeconds
+    fun recordsMissing(history: Atc3BolusHistory, lastAnswerNewestUtcSeconds: Long): Boolean {
+        if (history.records.size >= history.recordCount) return false
+        if (lastAnswerNewestUtcSeconds == 0L) return true
+        val minute = minuteOf(lastAnswerNewestUtcSeconds)
+        return history.records.none { minuteOf(it.pumpClockUtcSeconds) == minute }
     }
 
-    /** True when these records would resolve that pending bolus, changing nothing. */
-    fun wouldResolve(
-        records: List<Atc3BolusRecord>,
-        pending: PendingBolus,
-        ledger: Atc3HistoryLedger
-    ): Boolean {
-        val ordered = records.sortedBy { it.pumpClockUtcSeconds }
-        val seenPairs = ledger.pairWithSeen(ordered)
-        val fresh = ordered.filter { !seenPairs.containsKey(it) }
-        return pairUp(fresh, ownDoses(ledger)).values.any { it.pending?.temporaryId == pending.temporaryId }
-    }
+    /** Whether this record is nothing to write: empty, the pump's past behind the boundary on both clocks, older than a day, or from before AAPS adopted the pump. */
+    private fun isPast(record: Atc3BolusRecord, ledger: Atc3HistoryLedger, phoneNow: Long, earliestAcceptedMs: Long): Boolean =
+        record.isEmptyRecord ||
+            (record.pumpClockUtcSeconds < ledger.importFromUtcSeconds && record.timestamp <= ledger.importFromPhoneMs) ||
+            record.timestamp < phoneNow - Atc3Const.RECONCILE_MAX_AGE_MS ||
+            record.timestamp < earliestAcceptedMs
 
-    /** Whether this record is the pump's past: behind the boundary on both clocks, and strictly older. */
-    private fun isTooOld(
-        record: Atc3BolusRecord,
-        timestamp: Long,
-        ledger: Atc3HistoryLedger,
-        phoneNow: Long
-    ): Boolean =
-        (record.pumpClockUtcSeconds < ledger.importFromUtcSeconds && timestamp <= ledger.importFromPhoneMs) ||
-            timestamp < phoneNow - Atc3Const.RECONCILE_MAX_AGE_MS
+    /** Whether this record can be that bolus of ours: the same dose asked, in the minute ours started in or one either side. */
+    private fun fits(record: Atc3BolusRecord, expected: ExpectedBolus): Boolean =
+        record.rawRequested == Atc3HistoryLedger.raw(expected.units) &&
+            minuteOf(record.pumpClockUtcSeconds) in (minuteOf(expected.startUtcSeconds) - 1)..(minuteOf(expected.startUtcSeconds) + 1)
 
-    /** One bolus of ours waiting for its record: running or cut short ([pending]), or closed on its completion frame ([settled]). */
-    private class OwnDose(val startUtcSeconds: Long, val requestedRaw: Int, val pending: PendingBolus?, val settled: SettledBolus?) {
-
-        val startMinute: Long get() = Math.floorDiv(startUtcSeconds, 60L)
-    }
-
-    private fun ownDoses(ledger: Atc3HistoryLedger): List<OwnDose> =
-        ledger.pending.map { OwnDose(it.startUtcSeconds, raw(it.requestedUnits), it, null) } +
-            ledger.settled.map { OwnDose(it.startUtcSeconds, raw(it.requestedUnits), null, it) }
-
-    /** Which record is which bolus of ours, first in, first out; keyed by the record object, as two equal records are two boluses. */
-    private fun pairUp(records: List<Atc3BolusRecord>, doses: List<OwnDose>): Map<Atc3BolusRecord, OwnDose> {
-        val paired = IdentityHashMap<Atc3BolusRecord, OwnDose>()
-        val oldestFirst = records.sortedBy { it.pumpClockUtcSeconds }
-        for (dose in doses.sortedBy { it.startUtcSeconds }) {
-            val record = oldestFirst.firstOrNull { !paired.containsKey(it) && fits(it, dose) } ?: continue
-            paired[record] = dose
-        }
-        return paired
-    }
-
-    /** Whether this record can be that bolus of ours: the same dose asked, no more delivered, the same minute or one either side. */
-    private fun fits(record: Atc3BolusRecord, dose: OwnDose): Boolean =
-        minuteOf(record.pumpClockUtcSeconds) in (dose.startMinute - 1)..(dose.startMinute + 1) &&
-            record.rawRequested == dose.requestedRaw &&
-            record.rawExtendedRequested == 0 &&
-            record.rawExtendedDelivered == 0 &&
-            record.rawDelivered <= record.rawRequested
-
-    /** Whether [records] hold what can be the record of our bolus started at [startUtcSeconds] for [requestedUnits]. */
-    fun holdsRecordOf(records: List<Atc3BolusRecord>, startUtcSeconds: Long, requestedUnits: Double): Boolean {
-        val minute = minuteOf(startUtcSeconds)
-        val requestedRaw = raw(requestedUnits)
-        return records.any {
-            minuteOf(it.pumpClockUtcSeconds) in (minute - 1)..(minute + 1) &&
-                it.rawRequested == requestedRaw && it.rawExtendedRequested == 0
-        }
-    }
-
+    /** The minute a pump clock key falls in, counted in minutes. */
     private fun minuteOf(utcSeconds: Long): Long = Math.floorDiv(utcSeconds, 60L)
 
-    private fun raw(units: Double): Int = (units / Atc3Protocol.DOSE_SCALE).roundToInt()
+    /** The first millisecond of the minute [timestamp] lies in. */
+    fun minuteStartOf(timestamp: Long): Long = timestamp - Math.floorMod(timestamp, 60_000L)
 }

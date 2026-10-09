@@ -51,7 +51,6 @@ class Atc3BolusRecordTest {
         // The pump was asked for 10.0 U and stopped after 0.300 U.
         assertEquals(10.0, record.requestedUnits, 1e-9)
         assertEquals(0.300, record.deliveredUnits, 1e-9)
-        assertTrue(record.isIncomplete)
     }
 
     @Test
@@ -71,7 +70,6 @@ class Atc3BolusRecordTest {
         val record = decode(COMPLETED_BOLUS)
         assertEquals(1.15, record.requestedUnits, 1e-9)
         assertEquals(1.15, record.deliveredUnits, 1e-9)
-        assertFalse(record.isIncomplete)
     }
 
     @Test
@@ -84,7 +82,6 @@ class Atc3BolusRecordTest {
         assertEquals(0.050, record.extendedDeliveredUnits, 1e-9)
         assertEquals(0.050, record.totalDeliveredUnits, 1e-9)
         assertTrue(record.carriesExtendedPart)
-        assertTrue(record.isIncomplete)
     }
 
     @Test
@@ -98,7 +95,6 @@ class Atc3BolusRecordTest {
         assertEquals(3.000, record.totalRequestedUnits, 1e-9)
         assertEquals(0.450, record.totalDeliveredUnits, 1e-9)
         assertTrue(record.carriesExtendedPart)
-        assertTrue(record.isIncomplete)
     }
 
     @Test

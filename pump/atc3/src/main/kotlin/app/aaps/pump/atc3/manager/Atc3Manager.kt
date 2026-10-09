@@ -259,25 +259,6 @@ class Atc3Manager @Inject constructor(
         return lastProblem
     }
 
-    /**
-     * Read the bolus history again until [done] holds: the record of a bolus is written some time after it ends.
-     *
-     * @return the last history read that succeeded, or null when none did
-     */
-    fun readBolusHistoryUntil(attempts: Int, done: (Atc3BolusHistory) -> Boolean): Atc3BolusHistory? {
-        var last: Atc3BolusHistory? = null
-        repeat(attempts) { attempt ->
-            SystemClock.sleep(Atc3Const.EFFECT_POLL_INTERVAL_MS)
-            val history = readBolusHistory()
-            if (history != null) {
-                last = history
-                if (done(history)) return history
-            }
-            aapsLogger.debug(LTag.PUMP, "ATC3: the bolus is not in the pump's history yet, check ${attempt + 1}")
-        }
-        return last
-    }
-
     /** Read the recent boluses; when records have aged out of this answer, [readFullBolusHistory] has the rest. */
     fun readBolusHistory(): Atc3BolusHistory? =
         readRecords(

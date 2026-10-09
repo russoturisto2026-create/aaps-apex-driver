@@ -1,6 +1,5 @@
 package app.aaps.pump.atc3.link
 
-import android.content.Context
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.atc3.keys.Atc3BooleanKey
 import app.aaps.pump.atc3.trace.Atc3Trace
@@ -10,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mock
 import org.mockito.kotlin.whenever
+import java.util.concurrent.Executors
 
 /**
  * That the driver only ever asks the Bluetooth stack for one thing at a time.
@@ -26,53 +26,55 @@ import org.mockito.kotlin.whenever
  */
 class Atc3BleGattQueueTest : TestBase() {
 
-    @Mock lateinit var context: Context
     @Mock lateinit var preferences: Preferences
 
-    private lateinit var ble: Atc3BLE
+    private lateinit var ops: Atc3GattOps
+
+    /** The steps whose failure ended the link, by name. */
+    private val failed = mutableListOf<String>()
 
     @BeforeEach
     fun setup() {
         // The trace is exercised on its own elsewhere; here it must not get in the way of the
         // ordering being checked.
         whenever(preferences.get(Atc3BooleanKey.Trace)).thenReturn(false)
-        ble = Atc3BLE(aapsLogger, context, Atc3Trace(aapsLogger, preferences))
+        ops = Atc3GattOps(aapsLogger, Atc3Trace(aapsLogger, preferences), Executors.newSingleThreadScheduledExecutor()) { kind, _ -> failed += kind }
     }
 
     @Test
     fun `an operation is issued as soon as it is asked for`() {
         var issued = false
 
-        ble.enqueueOp(Atc3BLE.OP_MTU) { issued = true; true }
+        ops.enqueue(Atc3BLE.OP_MTU, TIMEOUT_MS) { issued = true; true }
 
         assertThat(issued).isTrue()
-        assertThat(ble.opInFlightKind()).isEqualTo(Atc3BLE.OP_MTU)
-        assertThat(ble.opQueueDepth()).isEqualTo(0)
+        assertThat(ops.inFlightKind()).isEqualTo(Atc3BLE.OP_MTU)
+        assertThat(ops.queueDepth()).isEqualTo(0)
     }
 
     @Test
     fun `a second operation waits rather than going out on top of the first`() {
         var secondIssued = false
-        ble.enqueueOp(Atc3BLE.OP_MTU) { true }
+        ops.enqueue(Atc3BLE.OP_MTU, TIMEOUT_MS) { true }
 
-        ble.enqueueOp(Atc3BLE.OP_DISCOVER) { secondIssued = true; true }
+        ops.enqueue(Atc3BLE.OP_DISCOVER, TIMEOUT_MS) { secondIssued = true; true }
 
         assertThat(secondIssued).isFalse()
-        assertThat(ble.opInFlightKind()).isEqualTo(Atc3BLE.OP_MTU)
-        assertThat(ble.opQueueDepth()).isEqualTo(1)
+        assertThat(ops.inFlightKind()).isEqualTo(Atc3BLE.OP_MTU)
+        assertThat(ops.queueDepth()).isEqualTo(1)
     }
 
     @Test
     fun `the one waiting goes out the moment the first is answered`() {
         var secondIssued = false
-        ble.enqueueOp(Atc3BLE.OP_MTU) { true }
-        ble.enqueueOp(Atc3BLE.OP_DISCOVER) { secondIssued = true; true }
+        ops.enqueue(Atc3BLE.OP_MTU, TIMEOUT_MS) { true }
+        ops.enqueue(Atc3BLE.OP_DISCOVER, TIMEOUT_MS) { secondIssued = true; true }
 
-        assertThat(ble.completeOp(Atc3BLE.OP_MTU, 0)).isTrue()
+        assertThat(ops.complete(Atc3BLE.OP_MTU, 0)).isTrue()
 
         assertThat(secondIssued).isTrue()
-        assertThat(ble.opInFlightKind()).isEqualTo(Atc3BLE.OP_DISCOVER)
-        assertThat(ble.opQueueDepth()).isEqualTo(0)
+        assertThat(ops.inFlightKind()).isEqualTo(Atc3BLE.OP_DISCOVER)
+        assertThat(ops.queueDepth()).isEqualTo(0)
     }
 
     /**
@@ -83,31 +85,31 @@ class Atc3BleGattQueueTest : TestBase() {
     @Test
     fun `the answer to one operation does not release the next while the first is outstanding`() {
         var subscribeIssued = false
-        ble.enqueueOp(Atc3BLE.OP_WRITE_AUTH) { true }
-        ble.enqueueOp(Atc3BLE.OP_SUBSCRIBE_DATA) { subscribeIssued = true; true }
+        ops.enqueue(Atc3BLE.OP_WRITE_AUTH, TIMEOUT_MS) { true }
+        ops.enqueue(Atc3BLE.OP_SUBSCRIBE_DATA, TIMEOUT_MS) { subscribeIssued = true; true }
 
         // The pump's verdict arrives, but it is not this operation's completion.
-        assertThat(ble.completeOp(Atc3BLE.OP_SUBSCRIBE_DATA, 0)).isFalse()
+        assertThat(ops.complete(Atc3BLE.OP_SUBSCRIBE_DATA, 0)).isFalse()
         assertThat(subscribeIssued).isFalse()
 
         // Only the write being reported frees the stack.
-        assertThat(ble.completeOp(Atc3BLE.OP_WRITE_AUTH, 0)).isTrue()
+        assertThat(ops.complete(Atc3BLE.OP_WRITE_AUTH, 0)).isTrue()
         assertThat(subscribeIssued).isTrue()
     }
 
     @Test
     fun `a callback nobody was waiting for is refused rather than acted on`() {
-        assertThat(ble.completeOp(Atc3BLE.OP_SUBSCRIBE_DATA, 0)).isFalse()
-        assertThat(ble.opInFlightKind()).isNull()
+        assertThat(ops.complete(Atc3BLE.OP_SUBSCRIBE_DATA, 0)).isFalse()
+        assertThat(ops.inFlightKind()).isNull()
     }
 
     @Test
     fun `a duplicate callback for a finished operation is refused`() {
-        ble.enqueueOp(Atc3BLE.OP_MTU) { true }
-        assertThat(ble.completeOp(Atc3BLE.OP_MTU, 0)).isTrue()
+        ops.enqueue(Atc3BLE.OP_MTU, TIMEOUT_MS) { true }
+        assertThat(ops.complete(Atc3BLE.OP_MTU, 0)).isTrue()
 
         // One MTU request can be reported twice. The second report completes nothing.
-        assertThat(ble.completeOp(Atc3BLE.OP_MTU, 0)).isFalse()
+        assertThat(ops.complete(Atc3BLE.OP_MTU, 0)).isFalse()
     }
 
     /**
@@ -118,23 +120,24 @@ class Atc3BleGattQueueTest : TestBase() {
     @Test
     fun `an operation the stack refuses ends the connection instead of waiting for nothing`() {
         var laterIssued = false
-        ble.enqueueOp(Atc3BLE.OP_SUBSCRIBE_DATA) { false }
-        ble.enqueueOp(Atc3BLE.OP_DISCOVER) { laterIssued = true; true }
+        ops.enqueue(Atc3BLE.OP_SUBSCRIBE_DATA, TIMEOUT_MS) { false }
+        ops.enqueue(Atc3BLE.OP_DISCOVER, TIMEOUT_MS) { laterIssued = true; true }
 
-        assertThat(ble.opInFlightKind()).isNull()
-        assertThat(ble.opQueueDepth()).isEqualTo(0)
+        assertThat(ops.inFlightKind()).isNull()
+        assertThat(ops.queueDepth()).isEqualTo(0)
         assertThat(laterIssued).isFalse()
+        assertThat(failed).containsExactly(Atc3BLE.OP_SUBSCRIBE_DATA)
     }
 
     @Test
     fun `operations queued for a link that ended do not survive into the next one`() {
-        ble.enqueueOp(Atc3BLE.OP_MTU) { true }
-        ble.enqueueOp(Atc3BLE.OP_DISCOVER) { true }
+        ops.enqueue(Atc3BLE.OP_MTU, TIMEOUT_MS) { true }
+        ops.enqueue(Atc3BLE.OP_DISCOVER, TIMEOUT_MS) { true }
 
-        ble.disconnect()
+        ops.close()
 
-        assertThat(ble.opInFlightKind()).isNull()
-        assertThat(ble.opQueueDepth()).isEqualTo(0)
+        assertThat(ops.inFlightKind()).isNull()
+        assertThat(ops.queueDepth()).isEqualTo(0)
     }
 
     /**
@@ -145,26 +148,31 @@ class Atc3BleGattQueueTest : TestBase() {
     @Test
     fun `no operation is taken once the link has ended`() {
         var issued = false
-        ble.disconnect()
+        ops.close()
 
-        ble.enqueueOp(Atc3BLE.OP_DISCOVER) { issued = true; true }
+        ops.enqueue(Atc3BLE.OP_DISCOVER, TIMEOUT_MS) { issued = true; true }
 
         assertThat(issued).isFalse()
-        assertThat(ble.opInFlightKind()).isNull()
-        assertThat(ble.opQueueDepth()).isEqualTo(0)
+        assertThat(ops.inFlightKind()).isNull()
+        assertThat(ops.queueDepth()).isEqualTo(0)
     }
 
     @Test
     fun `each operation is issued exactly once however many queue behind it`() {
         var mtuIssues = 0
-        ble.enqueueOp(Atc3BLE.OP_MTU) { mtuIssues++; true }
-        ble.enqueueOp(Atc3BLE.OP_DISCOVER) { true }
-        ble.enqueueOp(Atc3BLE.OP_SUBSCRIBE_AUTH) { true }
+        ops.enqueue(Atc3BLE.OP_MTU, TIMEOUT_MS) { mtuIssues++; true }
+        ops.enqueue(Atc3BLE.OP_DISCOVER, TIMEOUT_MS) { true }
+        ops.enqueue(Atc3BLE.OP_SUBSCRIBE_AUTH, TIMEOUT_MS) { true }
 
-        ble.completeOp(Atc3BLE.OP_MTU, 0)
-        ble.completeOp(Atc3BLE.OP_DISCOVER, 0)
+        ops.complete(Atc3BLE.OP_MTU, 0)
+        ops.complete(Atc3BLE.OP_DISCOVER, 0)
 
         assertThat(mtuIssues).isEqualTo(1)
-        assertThat(ble.opInFlightKind()).isEqualTo(Atc3BLE.OP_SUBSCRIBE_AUTH)
+        assertThat(ops.inFlightKind()).isEqualTo(Atc3BLE.OP_SUBSCRIBE_AUTH)
+    }
+
+    private companion object {
+
+        const val TIMEOUT_MS = 5_000L
     }
 }

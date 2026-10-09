@@ -76,48 +76,4 @@ class Atc3BleConnectTest : TestBase() {
         assertThat(ble.isConnecting).isFalse()
         assertThat(ble.isConnected).isFalse()
     }
-
-    @Test
-    fun `service discovery is started once however many MTU callbacks arrive`() {
-        // Two MTU callbacks can arrive for one request. Discovery started from each would put two
-        // of everything in flight for the rest of the setup — two discoveries, two subscriptions
-        // to the authorisation characteristic, two password writes — and a GATT connection carries
-        // one operation at a time. The subscription that produces "ready" could then be dropped by
-        // the stack with no callback at all, and the connection would sit out its whole watchdog.
-        assertThat(ble.claimDiscovery()).isTrue()
-
-        assertThat(ble.claimDiscovery()).isFalse()
-        assertThat(ble.claimDiscovery()).isFalse()
-    }
-
-    @Test
-    fun `discovered characteristics are acted on once`() {
-        assertThat(ble.claimServices()).isTrue()
-
-        assertThat(ble.claimServices()).isFalse()
-    }
-
-    @Test
-    fun `the setup of one link is begun once however many connected callbacks arrive`() {
-        // One connection attempt and two connected callbacks 26 ms apart, as when the phone's
-        // Bluetooth is being switched off. Setup begun again from the second asked
-        // for the MTU while service discovery from the first was still in flight; a GATT
-        // connection carries one operation at a time, so the answers stopped belonging to what was
-        // waiting for them and discovery was never answered at all.
-        assertThat(ble.claimLinkUp()).isTrue()
-
-        assertThat(ble.claimLinkUp()).isFalse()
-        assertThat(ble.claimLinkUp()).isFalse()
-    }
-
-    @Test
-    fun `a fresh transport has claimed nothing`() {
-        // The claims are per connection, so a new one has to be able to take them again. What
-        // clears them is the same state reset that clears the characteristics and the link stamp.
-        val second = Atc3BLE(aapsLogger, context, Atc3Trace(aapsLogger, preferences))
-
-        assertThat(second.claimDiscovery()).isTrue()
-        assertThat(second.claimServices()).isTrue()
-        assertThat(second.claimLinkUp()).isTrue()
-    }
 }

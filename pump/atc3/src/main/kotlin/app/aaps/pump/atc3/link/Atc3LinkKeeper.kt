@@ -11,14 +11,11 @@ import app.aaps.core.interfaces.ui.UiInteraction
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.atc3.R
-import app.aaps.pump.atc3.basal.Atc3BasalFact
-import app.aaps.pump.atc3.basal.Atc3BasalPeriodKeeper
-import app.aaps.pump.atc3.check.Atc3AapsJournal
 import app.aaps.pump.atc3.clock.Atc3DayClock
 import app.aaps.pump.atc3.history.Atc3HistorySync
 import app.aaps.pump.atc3.keys.Atc3StringKey
-import app.aaps.pump.atc3.keys.Atc3StringNonKey
 import app.aaps.pump.atc3.state.Atc3PumpState
+import app.aaps.pump.atc3.store.Atc3Store
 import app.aaps.pump.atc3.trace.Atc3Trace
 import app.aaps.pump.atc3.trace.Atc3TraceCat
 import kotlinx.coroutines.CoroutineScope
@@ -33,14 +30,17 @@ import javax.inject.Singleton
 
 /**
  * A pump that stopped answering, by the rules of [Atc3LinkWatch]: looks once a minute, tells the
- * user, holds the pump stopped, and when it answers again writes the silence as the pump accounts
- * for it. Nothing is asked of the pump from here: a status is asked of the queue.
+ * user, holds the pump stopped with no basal credited from its last answer on, and lifts the stop
+ * when it answers again. What the pump delivered meanwhile is not written back: the window closed
+ * at the answer counts it, see [app.aaps.pump.atc3.basal.Atc3BasalPeriod]. Nothing is asked of the
+ * pump from here: a status is asked of the queue.
  */
 @Singleton
 class Atc3LinkKeeper @Inject constructor(
     private val aapsLogger: AAPSLogger,
     private val rh: ResourceHelper,
     private val preferences: Preferences,
+    private val store: Atc3Store,
     private val dateUtil: DateUtil,
     private val commandQueue: CommandQueue,
     private val rxBus: RxBus,
@@ -48,10 +48,7 @@ class Atc3LinkKeeper @Inject constructor(
     private val pumpState: Atc3PumpState,
     private val atc3Connection: Atc3Connection,
     private val atc3HistorySync: Atc3HistorySync,
-    private val aapsJournal: Atc3AapsJournal,
-    private val basalPeriods: Atc3BasalPeriodKeeper,
-    private val trace: Atc3Trace,
-    private val basalFact: Atc3BasalFact
+    private val trace: Atc3Trace
 ) {
 
     /** When this process began watching: silence is counted from here until the first answer. */
@@ -63,12 +60,8 @@ class Atc3LinkKeeper @Inject constructor(
     /** How many times the user has been told of the silence under way. */
     private var linkAlarmsSaid = 0
 
-    /** Keeps the minutely look and the read that ends a silence from writing the stop's row at once. */
+    /** Keeps the minutely look and the read that ends a silence from changing the stop at once. */
     private val linkLock = Mutex()
-
-    /** The stop the pump is held in, as on disk, see [linkStop]. */
-    @Volatile private var linkStopHeld: Atc3LinkWatch.Stop? = null
-    @Volatile private var linkStopLoaded = false
 
     /** Whether the driver is the active pump; set by [watch]. */
     private var enabled: () -> Boolean = { true }
@@ -79,7 +72,8 @@ class Atc3LinkKeeper @Inject constructor(
     /** The pump answered: the moment and count a stop would be counted from, kept on disk. */
     fun noteAnswer() {
         val card = pumpState.statusCard ?: return
-        preferences.put(Atc3StringNonKey.LastAnswer, Atc3LinkWatch.Stop(card.readAtMs, card.deliveredTodayUnits).encode())
+        val answer = Atc3LinkWatch.Stop(card.readAtMs, card.deliveredTodayUnits)
+        store.update { it.copy(lastAnswer = answer) }
     }
 
     /** Look once a minute for a pump that stopped answering, see [Atc3LinkWatch]. */
@@ -113,7 +107,7 @@ class Atc3LinkKeeper @Inject constructor(
             val silence = now - (pumpState.lastConnection.takeIf { it > 0L } ?: linkWatchedSinceMs)
             val due = Atc3LinkWatch.alarmsDue(silence)
             if (due == 0) {
-                // The pump answers. A stop still open is closed by the read that found it, not here.
+                // The pump answers. A stop still open is lifted by the read that found it, not here.
                 if (linkAlarmsSaid > 0) {
                     linkAlarmsSaid = 0
                     rxBus.send(EventDismissNotification(Notification.PUMP_UNREACHABLE))
@@ -143,87 +137,34 @@ class Atc3LinkKeeper @Inject constructor(
     }
 
     /** The stop the pump is held in for want of an answer, or null when there is none. */
-    private fun linkStop(): Atc3LinkWatch.Stop? {
-        if (!linkStopLoaded) {
-            linkStopHeld = Atc3LinkWatch.Stop.decode((preferences.get(Atc3StringNonKey.LinkStop) as String?).orEmpty())
-            linkStopLoaded = true
-        }
-        return linkStopHeld
-    }
+    private fun linkStop(): Atc3LinkWatch.Stop? = store.state.linkStop
 
     /**
      * Half an hour of silence: the pump is held stopped from its last answer on disk. A pump never
      * heard from, or last heard from over a day ago, or heard from just now, is held to nothing.
      */
     private fun holdLinkStop(now: Long): Atc3LinkWatch.Stop? {
-        val stop = Atc3LinkWatch.Stop.decode((preferences.get(Atc3StringNonKey.LastAnswer) as String?).orEmpty()) ?: return null
-        if (now - stop.fromReadMs > DAY_MS || !Atc3LinkWatch.stopDue(now - stop.fromReadMs)) return null
-        preferences.put(Atc3StringNonKey.LinkStop, stop.encode())
-        linkStopHeld = stop
-        linkStopLoaded = true
+        val stop = store.state.lastAnswer ?: return null
+        if (now - stop.fromReadMs > Atc3DayClock.DAY_MS || !Atc3LinkWatch.stopDue(now - stop.fromReadMs)) return null
+        store.update { it.copy(linkStop = stop) }
         trace.event(Atc3TraceCat.DRV, "link_stop", "from" to stop.fromReadMs, "counter" to stop.fromCounterUnits)
         return stop
     }
 
-    /**
-     * The pump answered after being held stopped: the silence is written as the pump accounts for it,
-     * see [Atc3LinkWatch.account], with the bolus journal already read, and the stop is over.
-     *
-     * @return false when no row could be written at this read: the stop stays and the next read asks again
-     */
-    suspend fun closeStop(card: Atc3PumpState.StatusCard): Boolean = linkLock.withLock {
-        val stop = linkStop() ?: return@withLock true
-        val readMs = card.readAtMs
-        if (readMs > stop.fromReadMs) {
-            val midnight = Atc3DayClock.dayStartOf(readMs)
-            val dayBefore = stop.fromReadMs < midnight && Atc3DayClock.sameDay(stop.fromReadMs + DAY_MS, readMs)
-            val account = Atc3LinkWatch.account(
-                stop, readMs, card.deliveredTodayUnits,
-                bolusUnits = atc3HistorySync.bolusesLearnedAfter(stop.fromReadMs),
-                midnightMs = midnight,
-                dayTotalUnits = if (dayBefore) basalPeriods.dayTotalOf(stop.fromReadMs) else null,
-                bolusSinceMidnightUnits = if (stop.fromReadMs < midnight) aapsJournal.bolusesBetween(midnight, readMs) else 0.0
-            )
-            // The stop's own row ends at this read, and the pump's account takes its place.
-            atc3HistorySync.recordLinkStop(stop.fromReadMs, readMs - stop.fromReadMs)
-            val pumpTbrDurationMs =
-                if (card.tbrActive && !card.notDelivering) card.tbrDurationMinutes.takeIf { it > 0 }?.let { it * 60_000L } else null
-            for (stretch in account.stretches) {
-                val rows = aapsJournal.rowsBetween(stretch.fromMs, stretch.toMs)
-                if (!basalFact.writeBasalFact(stretch.fromMs, stretch.toMs, stretch.units, rows, pumpTbrDurationMs)) {
-                    trace.event(Atc3TraceCat.HIST, "link_back", "ok" to false, "from" to stretch.fromMs, "to" to stretch.toMs)
-                    return@withLock false
-                }
-            }
-            val minutes = ((readMs - stop.fromReadMs) / 60_000L).toInt()
-            val units = account.stretches.sumOf { it.units }
-            aapsLogger.warn(LTag.PUMP, "ATC3: the pump is back after $minutes min, ${account.outcome}, $units U of basal over that time")
-            trace.event(
-                Atc3TraceCat.HIST, "link_back",
-                "ok" to true, "from" to stop.fromReadMs, "to" to readMs, "outcome" to account.outcome.name.lowercase(), "basal" to units
-            )
-            when (account.outcome) {
-                Atc3LinkWatch.Outcome.COUNTED                 -> Unit
-
-                Atc3LinkWatch.Outcome.COUNT_RESET             ->
-                    uiInteraction.addNotification(Notification.WRONG_PUMP_DATA, rh.gs(R.string.atc3_link_back_reset, minutes), Notification.NORMAL)
-
-                Atc3LinkWatch.Outcome.BEFORE_MIDNIGHT_UNKNOWN ->
-                    uiInteraction.addNotification(Notification.WRONG_PUMP_DATA, rh.gs(R.string.atc3_link_back_midnight, minutes), Notification.URGENT)
-            }
-        }
-        preferences.put(Atc3StringNonKey.LinkStop, "")
-        linkStopHeld = null
+    /** The pump answered after being held stopped: the stop's row ends at this read, the stop is over, and the loop may run again. */
+    suspend fun closeStop(card: Atc3PumpState.StatusCard) = linkLock.withLock {
+        val stop = linkStop() ?: return@withLock
+        val minutes = ((card.readAtMs - stop.fromReadMs) / 60_000L).toInt()
+        atc3HistorySync.recordLinkStop(stop.fromReadMs, card.readAtMs - stop.fromReadMs)
+        store.update { it.copy(linkStop = null) }
         linkAlarmsSaid = 0
         rxBus.send(EventDismissNotification(Notification.PUMP_UNREACHABLE))
-        // In the exact basal mode the half hour under way begins at this read.
-        basalPeriods.beginAfterLinkBack(card)
-        true
+        aapsLogger.warn(LTag.PUMP, "ATC3: the pump is back after $minutes min; the window closed at this read counts what it delivered")
+        trace.event(Atc3TraceCat.HIST, "link_back", "from" to stop.fromReadMs, "to" to card.readAtMs, "min" to minutes)
     }
 
     private companion object {
 
         const val LINK_WATCH_MS = 60_000L
-        const val DAY_MS = 24 * 60 * 60_000L
     }
 }

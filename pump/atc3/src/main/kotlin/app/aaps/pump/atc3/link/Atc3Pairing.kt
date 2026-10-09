@@ -8,7 +8,6 @@ import app.aaps.core.interfaces.queue.Callback
 import app.aaps.core.interfaces.queue.Command
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.pump.atc3.check.Atc3StateCheck
 import app.aaps.pump.atc3.command.Atc3Pair
 import app.aaps.pump.atc3.history.Atc3HistorySync
 import app.aaps.pump.atc3.keys.Atc3StringKey
@@ -32,7 +31,6 @@ class Atc3Pairing @Inject constructor(
     private val pumpSync: PumpSync,
     private val atc3HistorySync: Atc3HistorySync,
     private val pumpState: Atc3PumpState,
-    private val stateCheck: Atc3StateCheck,
     // Lazy: the connection asks this class whether a pump is on trial.
     private val atc3Connection: Lazy<Atc3Connection>,
     private val pumpEnactResultProvider: Provider<PumpEnactResult>
@@ -109,12 +107,13 @@ class Atc3Pairing @Inject constructor(
             commandQueue.isRunning(Command.CommandType.BOLUS) ||
             commandQueue.isRunning(Command.CommandType.SMB_BOLUS)
 
-    /** Forget the pump, drop the link, and start the comparison of the pump's count over. */
+    /** Forget the pump whole and drop the link; the window of the basal account goes with the rest, and begins anew with the next pump. */
     fun disconnect() {
         aapsLogger.debug(LTag.PUMP, "ATC3: user disconnected the pump ${preferences.get(Atc3StringKey.Atc3SerialNumber)}")
         forgetCredentials()
         atc3Connection.get().disconnect(UNPAIRED_REASON)
-        stateCheck.forget()
+        atc3HistorySync.forgetPump("")
+        pumpState.reset()
     }
 
     private fun forgetCredentials() {

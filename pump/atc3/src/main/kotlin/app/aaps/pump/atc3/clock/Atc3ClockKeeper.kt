@@ -149,7 +149,7 @@ class Atc3ClockKeeper @Inject constructor(
         atc3HistorySync.reconcileBoluses(history.records, history.recordCount)
 
         // No control command while a bolus of ours may still run: it would take the link down. The next tick asks again.
-        if (atc3HistorySync.hasPendingBolus()) {
+        if (atc3HistorySync.hasExpectedBolus()) {
             aapsLogger.debug(LTag.PUMP, "ATC3: $why, but a bolus of ours has no record yet and may still be running; the clock waits")
             trace.event(Atc3TraceCat.DRV, "clock_waits", "why" to "bolus")
             return false
@@ -165,7 +165,7 @@ class Atc3ClockKeeper @Inject constructor(
         }
         atc3HistorySync.onPumpClockWritten(dateUtil.now())
         clockSyncedAtMs = dateUtil.now()
-        // The anchor stays: a clock write changes neither the count nor the phone's time.
+        // The window's start stays: a clock write changes neither the count nor the phone's time.
         rxBus.send(EventDismissNotification(Notification.PUMP_WARNING))
         return true
     }

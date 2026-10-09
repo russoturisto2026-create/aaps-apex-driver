@@ -1,27 +1,17 @@
 package app.aaps.pump.atc3.history
 
-import app.aaps.pump.atc3.basal.Atc3BasalPeriod
-import app.aaps.pump.atc3.link.Atc3LinkWatch
-
 /**
- * The ids the driver gives AAPS for pump events: the pump numbers nothing, so an id is allocated once,
- * when a record is first seen, and kept in [Atc3HistoryLedger]. `id / 1000` is the second the event
- * belongs to; a kind digit keeps a bolus and a temporary basal of one second apart, and a bump digit
- * a second the pump gave to another record.
+ * The ids the driver gives AAPS for temporary basals and stops: the pump numbers nothing. `id / 1000`
+ * is the second the event belongs to; a kind digit keeps the kinds of one second apart, and a bump
+ * digit two of one kind. Bolus rows take their ids from the minute of their record instead, see
+ * [Atc3BolusReconciler].
  */
 object Atc3PumpId {
 
-    const val KIND_BOLUS = 0L
     const val KIND_TBR_START = 1L
     const val KIND_TBR_END = 2L
 
-    /** A pending bolus settled without the pump ever writing a record for it. */
-    const val KIND_RETRACTION = 3L
-
-    /** The basal of a passed half hour by the pump's count, see [Atc3BasalPeriod]. */
-    const val KIND_BASAL_FACT = 4L
-
-    /** The stop a pump is held in for want of an answer, see [Atc3LinkWatch]. */
+    /** The stop a pump is held in for want of an answer, see [app.aaps.pump.atc3.link.Atc3LinkWatch]. */
     const val KIND_LINK_STOP = 5L
 
     /** How far an id may be bumped away from a second another record already holds. */
