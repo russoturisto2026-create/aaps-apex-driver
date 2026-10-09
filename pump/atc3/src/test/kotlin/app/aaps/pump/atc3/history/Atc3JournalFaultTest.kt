@@ -310,7 +310,8 @@ class Atc3JournalFaultTest : TestBaseWithProfile() {
 
         val notedAt = fault.settleByCount(left, 0.01, now, 10.0)
 
-        assertThat(notedAt).isEqualTo(now)
+        // Nothing placed, nothing for the loop to decide again: a mark would refuse every SMB until a real bolus lands.
+        assertThat(notedAt).isNull()
         assertThat(rows).isEmpty()
         assertThat(sync.unsettledFaults()).isEmpty()
         verify(uiInteraction).addNotification(eq(Notification.PUMP_SYNC_ERROR), any(), eq(Notification.URGENT))
@@ -321,8 +322,9 @@ class Atc3JournalFaultTest : TestBaseWithProfile() {
     fun `more than one bolus can be is not written as one`() = runTest {
         val left = fault.settleOwn(found()).left
 
-        fault.settleByCount(left, 12.0, now, 10.0)
+        val notedAt = fault.settleByCount(left, 12.0, now, 10.0)
 
+        assertThat(notedAt).isNull()
         assertThat(rows).isEmpty()
         verify(uiInteraction).addNotification(eq(Notification.PUMP_SYNC_ERROR), any(), eq(Notification.URGENT))
     }

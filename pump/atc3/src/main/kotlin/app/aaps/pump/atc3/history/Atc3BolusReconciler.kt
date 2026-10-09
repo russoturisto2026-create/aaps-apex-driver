@@ -20,7 +20,11 @@ data class Atc3BolusRow(val timestamp: Long, val rawUnits: Int)
  */
 object Atc3BolusReconciler {
 
-    /** A row to write; [expected] is the bolus of ours this is the record of, null for anyone else's. */
+    /**
+     * A row to write; [expected] is the bolus of ours this is the record of, null for anyone else's.
+     * [timestamp] is the start of the record's minute, or the moment AAPS adopted the pump when that
+     * falls inside the minute: AAPS refuses a row dated before it, by a second as well as by a day.
+     */
     data class Write(val timestamp: Long, val units: Double, val pumpId: Long, val expected: ExpectedBolus?)
 
     /** An extended or dual bolus the pump gave, which no row carries. */
@@ -67,6 +71,8 @@ object Atc3BolusReconciler {
         for ((minute, ofMinute) in fresh.filterNot { it.carriesExtendedPart }.groupBy { minuteStartOf(it.timestamp) }.toSortedMap()) {
             val held = rows.filter { it.timestamp in minute until minute + 60_000L }.map { it.rawUnits }.toMutableList()
             var next = held.size
+            // Still inside the minute: a record dated before the adoption moment was skipped above.
+            val at = maxOf(minute, earliestAcceptedMs)
             for (record in ofMinute) {
                 if (held.remove(record.rawDelivered)) continue
                 val own = expected.firstOrNull { fits(record, it) }
@@ -74,7 +80,7 @@ object Atc3BolusReconciler {
                     expected = expected - own
                     shifts.add((minuteOf(record.pumpClockUtcSeconds) - minuteOf(own.startUtcSeconds)).toInt())
                 }
-                writes.add(Write(minute, record.deliveredUnits, minute + next++, own))
+                writes.add(Write(at, record.deliveredUnits, minute + next++, own))
             }
             rowsBeyond += held.size
         }

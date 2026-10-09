@@ -244,6 +244,17 @@ class Atc3BolusReconcilerTest {
         assertTrue(reconcile(listOf(record(minute, 40)), earliestAcceptedMs = minute + 60_000L).writes.isEmpty())
     }
 
+    @Test
+    fun `a record of the minute AAPS adopted the pump in is dated at that moment, not at the minute start`() {
+        // Adopted one second into the minute: a row at the minute start would be refused as older than the adoption.
+        val adopted = minute + 1_000L
+        val write = reconcile(listOf(record(minute, 40)), earliestAcceptedMs = adopted).writes.single()
+        assertEquals(adopted, write.timestamp)
+        assertEquals(minute, write.pumpId)
+        // Any other minute keeps the minute start.
+        assertEquals(minute, reconcile(listOf(record(minute, 40)), earliestAcceptedMs = minute - 90_000L).writes.single().timestamp)
+    }
+
     // Whether the usual answer of ten left records out
 
     @Test

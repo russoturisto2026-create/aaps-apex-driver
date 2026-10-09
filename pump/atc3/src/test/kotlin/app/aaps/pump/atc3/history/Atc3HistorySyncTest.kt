@@ -190,6 +190,30 @@ class Atc3HistorySyncTest : TestBaseWithProfile() {
     }
 
     @Test
+    fun `a bolus of the minute the pump was adopted in is dated at the adoption moment, so AAPS takes it`() = runTest {
+        // Adopted one second into the minute, the bolus 21 seconds later: a row at the minute start is older than the adoption.
+        val adopted = minuteOf(now - 60_000L) + 1_000L
+        whenever(pumpSync.verifyPumpIdentification(any(), any())).thenReturn(true)
+        whenever(preferences.get(LongNonKey.ActivePumpChangeTimestamp)).thenReturn(adopted)
+
+        sync.reconcileBoluses(listOf(record(60, 80)), 1)
+        sync.reconcileBoluses(listOf(record(60, 80)), 1)
+
+        verify(pumpSync, times(1)).syncBolusWithPumpId(eq(adopted), eq(2.0), eq(BS.Type.NORMAL), eq(minuteOf(now - 60_000L)), eq(PumpType.ATC3), eq(serial))
+        verify(uiInteraction, never()).addNotification(anyInt(), anyOrNull(), anyInt())
+    }
+
+    @Test
+    fun `a bolus row AAPS refuses is said on the screen`() = runTest {
+        afterFirstPass()
+        whenever(pumpSync.syncBolusWithPumpId(any(), any(), anyOrNull(), any(), any(), any())).thenReturn(false)
+
+        sync.reconcileBoluses(listOf(record(60, 80)), 1)
+
+        verify(uiInteraction, times(1)).addNotification(eq(Notification.PUMP_SYNC_ERROR), anyOrNull(), eq(Notification.URGENT))
+    }
+
+    @Test
     fun `a bolus AAPS already knows about is not imported a second time`() = runTest {
         afterFirstPass()
         sync.reconcileBoluses(listOf(record(60, 80)), 1)

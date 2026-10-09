@@ -13,7 +13,7 @@ object Atc3Const {
     const val HEARTBEAT_OBJECT: Byte = HEARTBEAT_PERIOD_MINUTES.toByte()
 
     /** The driver's version, on its screen and in the log at start: the date of the change and its number that day, raised with every change. */
-    const val DRIVER_VERSION = "2026.10.09.2"
+    const val DRIVER_VERSION = "2026.10.09.3"
 
     /** The firmware from which the pump has a Bluetooth password; older firmware is run under a standing warning. */
     val PASSWORD_FIRMWARE = listOf(1, 1, 1, 0)

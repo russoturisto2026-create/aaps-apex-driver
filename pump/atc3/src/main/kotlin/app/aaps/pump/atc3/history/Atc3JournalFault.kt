@@ -188,7 +188,8 @@ class Atc3JournalFault @Inject constructor(
             trace.event(Atc3TraceCat.HIST, "fault_row", "own" to false, "units" to 0.0, "beyond" to unexplainedUnits, "after" to afterMs)
             tell(rh.gs(R.string.atc3_journal_fault_unknown, between), readMs)
             faults.forEach { atc3HistorySync.markFaultSettled(it) }
-            return readMs
+            // No bolus placed, so nothing for the loop to decide again: a mark here would refuse SMBs until a real bolus lands.
+            return null
         }
         val pumpId = atc3HistorySync.writeUnrecorded(readMs, units, BS.Type.NORMAL) ?: return null
         faults.forEach { atc3HistorySync.markFaultSettled(it) }

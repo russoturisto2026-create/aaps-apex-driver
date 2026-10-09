@@ -245,7 +245,13 @@ class Atc3HistorySync @Inject constructor(
             val type = write.expected?.type ?: BS.Type.NORMAL
             aapsLogger.debug(LTag.PUMP, "ATC3: bolus of ${write.units} U at ${write.timestamp} written as ${type.name}, id ${write.pumpId}")
             if (!syncPumpBolus(write.timestamp, write.units, write.pumpId, type)) {
+                // Seen on the screen, not in the log only: the loop runs without this insulin until it is resolved.
                 aapsLogger.error(LTag.PUMP, "ATC3: AAPS refused the bolus of ${write.units} U at ${write.timestamp}, id ${write.pumpId}")
+                uiInteraction.addNotification(
+                    Notification.PUMP_SYNC_ERROR,
+                    rh.gs(R.string.atc3_bolus_row_refused, write.units, dateUtil.timeString(write.timestamp)),
+                    Notification.URGENT
+                )
             }
             // Counted for the comparison from now on; ours began when the pump accepted it, another's within its minute.
             learn(write.units, write.expected?.acceptedAtMs ?: write.timestamp)

@@ -32,6 +32,7 @@
     <string name="atc3_journal_fault_between" comment="Fills %1$s of atc3_journal_fault_count and atc3_journal_fault_unknown: two times of day">between %1$s and %2$s</string>
     <string name="atc3_journal_fault_count">Pump journal failure: the pump did not write down a bolus given %1$s. %2$.2f U by the pump\'s count were entered as a bolus without delivery. Check the pump.</string>
     <string name="atc3_journal_fault_unknown">Pump journal failure: the pump did not write down a bolus given %1$s, and its amount is not known. Check the pump and enter the bolus by hand.</string>
+    <string name="atc3_bolus_row_refused">AAPS did not accept the pump\'s record of a bolus of %1$.2f U at %2$s. The loop runs without this insulin. Enter the bolus by hand.</string>
     <string name="atc3_bolus_short">The pump delivered %1$.2f U of the %2$.2f U asked for</string>
     <string name="atc3_confirm_stop">Stop the pump? It will deliver no basal and no bolus until it is resumed.</string>
     <string name="atc3_confirm_resume">Resume the pump and let it deliver again?</string>

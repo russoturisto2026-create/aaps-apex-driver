@@ -30,6 +30,7 @@
     <string name="atc3_journal_fault_between">между %1$s и %2$s</string>
     <string name="atc3_journal_fault_count">Сбой журнала помпы: помпа не записала болюс, поданный %1$s. В учёт внесено %2$.2f ед. болюсом без подачи, по счётчику помпы. Проверьте помпу.</string>
     <string name="atc3_journal_fault_unknown">Сбой журнала помпы: помпа не записала болюс, поданный %1$s, и его доза неизвестна. Проверьте помпу и внесите болюс вручную.</string>
+    <string name="atc3_bolus_row_refused">AAPS не принял запись помпы о болюсе %1$.2f ед. в %2$s. Петля работает без этого инсулина. Внесите болюс вручную.</string>
     <string name="atc3_bolus_short">Помпа подала %1$.2f ед. из запрошенных %2$.2f ед.</string>
     <string name="atc3_confirm_stop">Остановить помпу? Она не будет подавать ни базал, ни болюсы, пока её не возобновят.</string>
     <string name="atc3_confirm_resume">Возобновить помпу и разрешить ей снова подавать инсулин?</string>
