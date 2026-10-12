@@ -155,6 +155,9 @@ class Atc3PumpPlugin @Inject constructor(
     /** True while the alarm notification on screen is this driver's: the id is shared, and only its own is dismissed. */
     private var alarmNotificationShown = false
 
+    /** The alarm this driver stopped the pump for, see [stopOnDeliveryAlarm]; null once the pump runs again. The user undoes that stop by hand, and is told so. */
+    @Volatile private var stoppedByDriverFor: Atc3Alarm? = null
+
     /** The status read pending while the pump is stopped, see [watchForResume]. */
     private var resumeWatch: Job? = null
 
@@ -237,7 +240,7 @@ class Atc3PumpPlugin @Inject constructor(
         absoluteRate.setIfSmaller(
             maxBasal,
             rh.gs(app.aaps.core.ui.R.string.limitingbasalratio, maxBasal, rh.gs(app.aaps.core.ui.R.string.pumplimit)),
-            this
+            Apex
         )
         return absoluteRate
     }
@@ -248,7 +251,7 @@ class Atc3PumpPlugin @Inject constructor(
         insulin.setIfSmaller(
             maxBolus,
             rh.gs(app.aaps.core.ui.R.string.limitingbolus, maxBolus, rh.gs(app.aaps.core.ui.R.string.pumplimit)),
-            this
+            Apex
         )
         return insulin
     }
@@ -714,25 +717,25 @@ class Atc3PumpPlugin @Inject constructor(
      * of an answer; no Bluetooth password is entered. Each lifts by itself once over.
      */
     override fun isLoopInvocationAllowed(value: Constraint<Boolean>): Constraint<Boolean> {
-        if (clockKeeper.tooFarApart) value.set(false, rh.gs(R.string.atc3_clock_loop_blocked), this)
+        if (clockKeeper.tooFarApart) value.set(false, rh.gs(R.string.atc3_clock_loop_blocked), Apex)
         // Told once and it happened again: the pump says it is delivering and the reservoir has
         // not moved through another round of the whole thing. Whatever the loop decides next would
         // be decided on insulin it believes went in, and the evidence is that it did not. Stop
         // until somebody has looked at the pump.
         if (reconciliation.deliveryStopped)
-            value.set(false, rh.gs(R.string.atc3_no_delivery_loop_blocked), this)
+            value.set(false, rh.gs(R.string.atc3_no_delivery_loop_blocked), Apex)
         // Extended and dual boluses let through on the pump: the pump keeps no record of a bolus
         // given while an extended one runs, and writes them all as one dual bolus when it ends.
         // Nothing the loop gives in that time reaches AAPS, so the loop does not run at all while
         // the pump is set to allow them.
         if (pumpState.settings?.extendedBolusAllowed == true)
-            value.set(false, rh.gs(R.string.atc3_extended_loop_blocked), this)
+            value.set(false, rh.gs(R.string.atc3_extended_loop_blocked), Apex)
         // No answer for half an hour: nothing is known of the pump, and nothing is decided for it
         // until it has answered and the time without an answer is written. See [Atc3LinkWatch].
-        if (linkKeeper.isHeldStopped) value.set(false, rh.gs(R.string.atc3_link_loop_blocked), this)
+        if (linkKeeper.isHeldStopped) value.set(false, rh.gs(R.string.atc3_link_loop_blocked), Apex)
         // No Bluetooth password entered in AAPS: the driver does not work with the pump, and
         // there is nothing for the loop to decide. See [Atc3Connection.isPasswordEntered].
-        if (!atc3Connection.isPasswordEntered) value.set(false, rh.gs(R.string.atc3_password_loop_blocked), this)
+        if (!atc3Connection.isPasswordEntered) value.set(false, rh.gs(R.string.atc3_password_loop_blocked), Apex)
         return value
     }
 
@@ -743,11 +746,19 @@ class Atc3PumpPlugin @Inject constructor(
         commandQueue.readStatus(rh.gs(R.string.atc3_clock_phone_time_changed), null)
     }
 
-    /** Tell the user when the pump is stopped: AAPS says the loop is suspended, not that no insulin goes in. */
+    /**
+     * Tell the user when the pump is stopped, and what to do: AAPS says the loop is suspended, not
+     * that no insulin goes in, and not that the stop was this driver's own and has to be undone by hand.
+     */
     private fun announceSuspension(suspended: Boolean) {
         if (suspended) {
-            uiInteraction.addNotification(Notification.PUMP_SUSPENDED, rh.gs(R.string.atc3_pump_suspended), Notification.NORMAL)
+            val alarm = stoppedByDriverFor
+            val text =
+                if (alarm != null) rh.gs(R.string.atc3_pump_stopped_by_aaps, rh.gs(Atc3AlarmText.labelRes(alarm)))
+                else rh.gs(R.string.atc3_pump_suspended)
+            uiInteraction.addNotification(Notification.PUMP_SUSPENDED, text, Notification.NORMAL)
         } else {
+            stoppedByDriverFor = null
             rxBus.send(EventDismissNotification(Notification.PUMP_SUSPENDED))
         }
     }
@@ -765,9 +776,7 @@ class Atc3PumpPlugin @Inject constructor(
             }
             return
         }
-        val names = codes.joinToString(", ") { code ->
-            Atc3Alarm.ofCode(code)?.let { rh.gs(alarmLabel(it)) } ?: rh.gs(R.string.atc3_alarm_unknown, code)
-        }
+        val names = codes.joinToString(", ") { code -> Atc3AlarmText.label(rh, code) }
         uiInteraction.addNotification(Notification.PUMP_ERROR, rh.gs(R.string.atc3_alarm_active, names), Notification.URGENT)
         alarmNotificationShown = true
     }
@@ -796,16 +805,7 @@ class Atc3PumpPlugin @Inject constructor(
         val failure = atc3Manager.setSuspended(true)
         trace.event(Atc3TraceCat.DRV, "alarm_stop", "alarm" to alarm.name, "ok" to (failure == null), "why" to (failure ?: "-"))
         if (failure != null) aapsLogger.error(LTag.PUMP, "ATC3: could not stop the pump on ${alarm.name}: $failure")
-    }
-
-    private fun alarmLabel(alarm: Atc3Alarm): Int = when (alarm) {
-        Atc3Alarm.LOW_BATTERY            -> R.string.atc3_alarm_low_battery
-        Atc3Alarm.BLOOD_GLUCOSE_REMINDER -> R.string.atc3_alarm_bg_reminder
-        Atc3Alarm.BUTTON_ERROR           -> R.string.atc3_alarm_button_error
-        Atc3Alarm.NO_DELIVERY            -> R.string.atc3_alarm_no_delivery
-        Atc3Alarm.MOTOR_ERROR            -> R.string.atc3_alarm_motor_error
-        Atc3Alarm.RESERVOIR_EMPTY        -> R.string.atc3_alarm_reservoir_empty
-        Atc3Alarm.DAILY_LIMIT            -> R.string.atc3_alarm_daily_limit
+        else stoppedByDriverFor = alarm
     }
 
     /** Read the refills when the reservoir went up, and every [Atc3Const.ALARM_READ_INTERVAL_MS] for one the ticks missed. */

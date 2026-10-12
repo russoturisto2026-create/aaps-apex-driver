@@ -10,11 +10,11 @@
     <string name="atc3_not_supported_extended_bolus">Драйвер Apex не поддерживает продлённый болюс</string>
     <string name="atc3_not_supported_percent_tbr">Драйвер Apex не поддерживает временный базал в процентах</string>
     <string name="atc3_not_connected">Помпа Apex не подключена</string>
-    <string name="atc3_refused_by_pump">Помпа отклонила команду. Проверьте ограничения, заданные на помпе.</string>
-    <string name="atc3_alarm_stop_locked">Помпа под тревогой ничего не подаёт и при этом заблокирована, поэтому остановить её отсюда нельзя. Разблокируйте помпу и остановите её.</string>
-    <string name="atc3_no_delivery">Помпа сообщает, что подаёт инсулин, но резервуар не убывает. Проверьте помпу и инфузионный набор.</string>
+    <string name="atc3_refused_by_pump">Помпа отклонила команду. Посмотрите на помпу: команду могут отклонить тревога, незавершённая смена резервуара или ограничение, заданное на помпе.</string>
+    <string name="atc3_alarm_stop_locked">Помпа подаёт тревогу, при которой подача останавливается, и при этом заблокирована, поэтому AAPS не может её остановить. Разблокируйте помпу и остановите её на самой помпе.</string>
+    <string name="atc3_no_delivery">Apex: помпа сообщает, что подаёт инсулин, но её счётчик поданного не растёт. Проверьте резервуар, инфузионный набор и экран помпы.</string>
     <string name="atc3_command_data_changed">На помпе найден болюс, которого петля не знала; петля решит заново</string>
-    <string name="atc3_no_delivery_loop_blocked">Помпа не подаёт инсулин, о подаче которого сообщает. Петля остановлена, пока помпу не проверят.</string>
+    <string name="atc3_no_delivery_loop_blocked">Помпа сообщает, что подаёт инсулин, но её счётчик поданного не растёт. Петля остановлена, базал за это время не засчитывается. Проверьте резервуар, набор и экран помпы: возможно, не завершена смена резервуара. Петля включится сама, как только помпа подаст инсулин.</string>
     <string name="atc3_extended_loop_blocked">На помпе разрешены растянутые и двойные болюсы. Петля не работает, пока их не выключить в настройках помпы.</string>
     <string name="atc3_link_silent">Apex: помпа не отвечает %1$d мин. Проверьте помпу и Bluetooth телефона.</string>
     <string name="atc3_link_stopped">Apex: помпа не отвечает %1$d мин. AAPS остановлен: петля не работает и базал не начисляется, пока помпа не ответит.</string>
@@ -25,7 +25,7 @@
     <string name="atc3_bolus_failed">Не удалось подать болюс</string>
     <string name="atc3_bolus_cancelled">Болюс отменён, инсулин не подавался</string>
     <string name="atc3_bolus_zero">Нечего подавать</string>
-    <string name="atc3_bolus_unconfirmed">Болюс подан. Помпа ещё не записала его; запись попадёт в AAPS, как только появится.</string>
+    <string name="atc3_bolus_unconfirmed">Болюс подан, но помпа ещё не записала его в свой журнал. AAPS внесёт его, как только запись появится.</string>
     <string name="atc3_journal_fault_own">Сбой журнала помпы: помпа не записала болюс %1$s. В учёт внесено %2$.2f ед. болюсом без подачи, столько было видно в последний раз. Проверьте помпу.</string>
     <string name="atc3_journal_fault_between">между %1$s и %2$s</string>
     <string name="atc3_journal_fault_count">Сбой журнала помпы: помпа не записала болюс, поданный %1$s. В учёт внесено %2$.2f ед. болюсом без подачи, по счётчику помпы. Проверьте помпу.</string>
@@ -35,10 +35,10 @@
     <string name="atc3_confirm_stop">Остановить помпу? Она не будет подавать ни базал, ни болюсы, пока её не возобновят.</string>
     <string name="atc3_confirm_resume">Возобновить помпу и разрешить ей снова подавать инсулин?</string>
     <string name="atc3_tdd_unavailable">Помпа не сообщила пригодных суточных доз</string>
-    <string name="atc3_pump_suspended">Apex: помпа остановлена и ничего не подаёт, включая базал</string>
-    <string name="atc3_resume_watch">Apex: слежу, когда остановленная помпа возобновит подачу</string>
+    <string name="atc3_pump_suspended">Apex: помпа остановлена и ничего не подаёт, включая базал. Когда будете готовы, запустите её на помпе или во вкладке Apex.</string>
+    <string name="atc3_resume_watch">Apex: жду, когда помпа снова начнёт подавать инсулин</string>
     <string name="atc3_history_stale">Apex: проверяю, не подавала ли помпа болюсы сама</string>
-    <string name="atc3_alarm_active">Apex: помпа подаёт тревогу — %1$s. Её нужно сбросить на помпе.</string>
+    <string name="atc3_alarm_active">Apex: тревога на помпе: %1$s. Сбросьте её на помпе.</string>
     <string name="atc3_alarm_low_battery">низкий заряд батареи</string>
     <string name="atc3_alarm_bg_reminder">напоминание об измерении ГК</string>
     <string name="atc3_alarm_button_error">ошибка кнопки</string>
@@ -46,7 +46,7 @@
     <string name="atc3_alarm_no_delivery">нет подачи, это тревога окклюзии</string>
     <string name="atc3_refill_note">Резервуар заправлен, на заполнение набора ушло %1$.2f ед.</string>
     <string name="atc3_alarm_daily_limit">достигнут суточный лимит дозы, до конца дня помпа ничего не подаёт</string>
-    <string name="atc3_alarm_reservoir_empty">резервуар пуст</string>
+    <string name="atc3_alarm_reservoir_empty">резервуар пуст, нужна заправка</string>
     <string name="atc3_alarm_unknown">код тревоги %1$d</string>
     <string name="atc3_smb_data_changed">Микроболюс отклонён: на помпе найден болюс, которого петля не знала, или записи помпы не удалось прочитать. Петля выполнит расчёт заново.</string>
     <string name="atc3_smb_stale_iob">Микроболюс отклонён: после расчёта петли на помпе был подан инсулин. Петля пересчитает с его учётом.</string>
@@ -175,4 +175,6 @@
     <string name="atc3_scanner_press_find">Нажмите «Найти», чтобы найти помпу</string>
     <string name="atc3_scanner_found">Найдена %1$s. Введите её пароль и нажмите «Подключить».</string>
     <string name="atc3_scanner_no_bluetooth">Bluetooth выключен или нет разрешения, искать помпу нельзя</string>
+    <string name="atc3_pump_stopped_by_aaps">Apex: AAPS остановил помпу из-за её тревоги (%1$s). Устраните причину, сбросьте тревогу на помпе и запустите помпу: на ней самой или во вкладке Apex. Сама она не запустится.</string>
+    <string name="atc3_alarm_note">Apex: %1$s</string>
 </resources>

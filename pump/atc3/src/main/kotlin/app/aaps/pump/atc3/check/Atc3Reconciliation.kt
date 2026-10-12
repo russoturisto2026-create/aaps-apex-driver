@@ -57,20 +57,23 @@ class Atc3Reconciliation @Inject constructor(
     /** The report time of the last report that showed the pump delivering: a stop kept from earlier in the day is not the one now. */
     private var lastRunningSnapshotMs = 0L
 
-    /** One tick's figures, for [noteMotion]. */
-    private data class Tick(val startMs: Long, val readMs: Long, val counterUnits: Double, val aapsUnits: Double)
-
-    private var lastTick: Tick? = null
-
-    /** Ticks in a row where the journal owed a step of insulin and the count did not move. */
-    private var motionlessTicks = 0
+    /** Whether the count moves while the journal says insulin is going in, see [Atc3MotionWatch]. */
+    private val motion = Atc3MotionWatch()
 
     /** True once the count has stood still for enough ticks in a row to stop the loop. */
-    val deliveryStopped: Boolean get() = motionlessTicks >= NO_DELIVERY_TICKS_TO_STOP
+    val deliveryStopped: Boolean get() = motion.deliveryStopped
+
+    /** True while the hold of [deliveryStopped] is written into AAPS as a stop, see [syncTbrFromStatus]. */
+    private var holdWritten = false
 
     /**
      * Write what the pump runs into AAPS, from the status just read. Reads more only on a disagreement:
      * the running temporary basal, for its start, and the last finished one, for when it really ended.
+     *
+     * While the pump is held as delivering nothing, [deliveryStopped], it is written as stopped: a
+     * temporary basal of zero from the read the count was last seen moving at, pushed on every tick,
+     * so that the journal holds what the count holds and not what was ordered. The hold ends at the
+     * read that sees the count move, and the row ends there.
      *
      * @return false when the running temporary basal was wanted and did not answer
      */
@@ -78,19 +81,33 @@ class Atc3Reconciliation @Inject constructor(
         val card = pumpState.statusCard ?: return false
         val openTbr = atc3HistorySync.openTbr()
         val tickAt = trace.now()
-        val (pausedAtMs, resumedAtMs) = pumpMoments(card)
+        val moments = pumpMoments(card)
+        val hold = deliveryStopped && !card.notDelivering
+        val stopped = card.notDelivering || hold
+        // The row begins where the count was last seen moving when the hold begins; a row begun again
+        // later, after somebody closed it, begins at the tick, what was written meanwhile stands.
+        val (pausedAtMs, resumedAtMs) = when {
+            hold                               -> (if (holdWritten) null else motion.stillSinceMs) to null
+            holdWritten && !card.notDelivering -> null to card.readAtMs
+            else                               -> moments
+        }
+        if (hold != holdWritten) {
+            trace.event(Atc3TraceCat.TBR, "hold", "on" to hold, "at" to (if (hold) motion.stillSinceMs else card.readAtMs))
+            aapsLogger.warn(LTag.PUMP, if (hold) "ATC3: the pump is written as stopped from ${motion.stillSinceMs}: the count has not moved" else "ATC3: the count moved, the stop written for it ends at ${card.readAtMs}")
+        }
+        holdWritten = hold
         val startRead = Atc3TbrTracker.needsStartRead(
-            openTbr, card.notDelivering, card.tbrActive, card.tbrRate, card.tbrDurationMs, tickAt,
+            openTbr, stopped, card.tbrActive, card.tbrRate, card.tbrDurationMs, tickAt,
             elapsedMinutes = card.tbrElapsedMinutes.takeIf { card.tbrActive }
         )
         val pumpTbrStart = if (startRead) atc3Manager.readActiveTbr() else null
         val tbrRead = !startRead || pumpTbrStart != null
         val endedAtMs =
-            if (Atc3TbrTracker.needsEndRead(openTbr, card.notDelivering, card.tbrActive, tickAt))
+            if (Atc3TbrTracker.needsEndRead(openTbr, stopped, card.tbrActive, tickAt))
                 atc3Manager.readFinishedTbr()?.let { atc3HistorySync.realEndOf(it) }
             else null
         atc3HistorySync.onStatus(
-            card.notDelivering, card.tbrActive, card.tbrRate, card.tbrDurationMs, pumpTbrStart, endedAtMs,
+            stopped, card.tbrActive, card.tbrRate, card.tbrDurationMs, pumpTbrStart, endedAtMs,
             pausedAtMs = pausedAtMs, resumedAtMs = resumedAtMs
         )
         return tbrRead
@@ -159,7 +176,7 @@ class Atc3Reconciliation @Inject constructor(
                 aapsLogger.error(LTag.PUMP, "ATC3: no profile is running, the journal cannot be summed")
             }
         val pumpUnits = counter - start.counterUnits
-        noteMotion(start.readMs, readMs, counter, journal.totalUnits)
+        motion.note(start.readMs, readMs, counter, journal.totalUnits)
         val verdict = Atc3StateCheck.compare(pumpUnits, journal.totalUnits, settledUnits, checkTolerance())
         // The row written from what we saw of our bolus, against the count once a read holds that bolus.
         ownFaultRow?.let { (atMs, units) ->
@@ -270,39 +287,11 @@ class Atc3Reconciliation @Inject constructor(
         return Resolved(journalRead = true, readFailed = false, outcome = outcome, foreignBolusAtMs = reconciled.newestImportedAtMs, verdict = verdict)
     }
 
-    /**
-     * Note whether the count moved since the last tick while the journal owed a step of insulin. The
-     * journal's figure is since the window began, so the last tick's is taken off it; when the window
-     * began at the last tick's read, it is the whole of it.
-     */
-    private fun noteMotion(startMs: Long, readMs: Long, counterUnits: Double, aapsUnits: Double) {
-        val last = lastTick
-        if (last != null && last.readMs == readMs) return
-        lastTick = Tick(startMs, readMs, counterUnits, aapsUnits)
-        if (last == null) return
-        val owed = when (startMs) {
-            last.startMs -> aapsUnits - last.aapsUnits
-            last.readMs  -> aapsUnits
-            // A window begun anew elsewhere: the count starts over, and so does this.
-            else         -> {
-                motionlessTicks = 0
-                return
-            }
-        }
-        val moved = counterUnits - last.counterUnits
-        if (moved < 0.0 || moved >= Atc3Protocol.DOSE_SCALE - Atc3Protocol.COUNT_EPSILON) {
-            motionlessTicks = 0
-            return
-        }
-        if (owed < Atc3Protocol.DOSE_SCALE) return
-        motionlessTicks++
-    }
-
     /** Say it when the pump owes insulin and its count has not moved, twice running; one more tick and the loop stops. */
     fun reportDeliveryStopped() {
-        if (motionlessTicks < NO_DELIVERY_TICKS_TO_TELL) return
-        aapsLogger.error(LTag.PUMP, "ATC3: the pump owes insulin and the reservoir has not moved for $motionlessTicks ticks")
-        trace.event(Atc3TraceCat.DRV, "no_delivery", "times" to motionlessTicks)
+        if (!motion.tellDue) return
+        aapsLogger.error(LTag.PUMP, "ATC3: the pump owes insulin and the reservoir has not moved for ${motion.motionlessTicks} ticks")
+        trace.event(Atc3TraceCat.DRV, "no_delivery", "times" to motion.motionlessTicks)
         uiInteraction.addNotification(Notification.PUMP_ERROR, rh.gs(R.string.atc3_no_delivery), Notification.URGENT)
     }
 
@@ -369,14 +358,5 @@ class Atc3Reconciliation @Inject constructor(
         val verdict = if (statusRead) checkState() else Atc3StateCheck.Verdict.Unknown
         val tbrRead = if (statusRead) syncTbrFromStatus() else true
         return resolve(verdict, readJournal).copy(tbrRead = tbrRead)
-    }
-
-    private companion object {
-
-        /** Ticks with the count standing still while insulin was owed before the user is told. */
-        const val NO_DELIVERY_TICKS_TO_TELL = 2
-
-        /** One more, and the loop is stopped as well. */
-        const val NO_DELIVERY_TICKS_TO_STOP = 3
     }
 }

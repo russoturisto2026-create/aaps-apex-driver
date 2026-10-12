@@ -12,11 +12,11 @@
     <string name="atc3_not_supported_extended_bolus">Apex driver does not support extended boluses</string>
     <string name="atc3_not_supported_percent_tbr">Apex driver does not support percentage temp basals</string>
     <string name="atc3_not_connected">Apex pump is not connected</string>
-    <string name="atc3_refused_by_pump">Pump refused the command. Check the limits set on the pump.</string>
-    <string name="atc3_alarm_stop_locked">The pump is delivering nothing under its alarm and is locked, so it cannot be stopped from here. Unlock the pump and stop it.</string>
-    <string name="atc3_no_delivery">The pump reports that it is delivering, but the reservoir has not moved. Check the pump and the infusion set.</string>
+    <string name="atc3_refused_by_pump">The pump refused the command. Look at the pump: an alarm, a reservoir change not finished, or a limit set on the pump can refuse it.</string>
+    <string name="atc3_alarm_stop_locked">The pump raises an alarm that stops delivery, and it is locked, so AAPS cannot stop it. Unlock the pump and stop it on the pump.</string>
+    <string name="atc3_no_delivery">Apex: the pump says it is delivering, but its count of delivered insulin does not grow. Check the reservoir, the infusion set and the pump screen.</string>
     <string name="atc3_command_data_changed">A bolus the loop did not know of was found on the pump; the loop will decide again</string>
-    <string name="atc3_no_delivery_loop_blocked">The pump is not delivering the insulin it reports. The loop is stopped until the pump has been checked.</string>
+    <string name="atc3_no_delivery_loop_blocked">The pump says it is delivering, but its count of delivered insulin does not grow. The loop is stopped and no basal is counted for this time. Check the reservoir, the infusion set and the pump screen: a reservoir change may be unfinished. The loop starts again by itself as soon as the pump delivers.</string>
     <string name="atc3_extended_loop_blocked">Extended and dual boluses are allowed on the pump. The loop does not run until they are turned off in the pump\'s settings.</string>
     <string name="atc3_link_silent">Apex: the pump has not answered for %1$d min. Check the pump and the phone\'s Bluetooth.</string>
     <string name="atc3_link_stopped">Apex: the pump has not answered for %1$d min. AAPS has stopped: the loop does not run and no basal is counted until the pump answers.</string>
@@ -27,7 +27,7 @@
     <string name="atc3_bolus_failed">Bolus could not be delivered</string>
     <string name="atc3_bolus_cancelled">Bolus cancelled, no insulin was delivered</string>
     <string name="atc3_bolus_zero">Nothing to deliver</string>
-    <string name="atc3_bolus_unconfirmed">Bolus delivered. The pump has not written it down yet; it reaches AAPS when it does.</string>
+    <string name="atc3_bolus_unconfirmed">Bolus delivered, but the pump has not written it in its history yet. AAPS adds it as soon as the record appears.</string>
     <string name="atc3_journal_fault_own">Pump journal failure: the pump did not write down the bolus of %1$s. %2$.2f U, the last amount seen of it, were entered as a bolus without delivery. Check the pump.</string>
     <string name="atc3_journal_fault_between" comment="Fills %1$s of atc3_journal_fault_count and atc3_journal_fault_unknown: two times of day">between %1$s and %2$s</string>
     <string name="atc3_journal_fault_count">Pump journal failure: the pump did not write down a bolus given %1$s. %2$.2f U by the pump\'s count were entered as a bolus without delivery. Check the pump.</string>
@@ -37,10 +37,10 @@
     <string name="atc3_confirm_stop">Stop the pump? It will deliver no basal and no bolus until it is resumed.</string>
     <string name="atc3_confirm_resume">Resume the pump and let it deliver again?</string>
     <string name="atc3_tdd_unavailable">The pump did not report usable daily totals</string>
-    <string name="atc3_pump_suspended">Apex: the pump is stopped and delivering nothing, basal included</string>
-    <string name="atc3_resume_watch">Apex: watching a stopped pump for the moment it resumes</string>
+    <string name="atc3_pump_suspended">Apex: the pump is stopped and delivers nothing, basal included. Start it on the pump or on the Apex tab when you are ready.</string>
+    <string name="atc3_resume_watch">Apex: waiting for the pump to deliver again</string>
     <string name="atc3_history_stale">Apex: checking the pump for boluses given on it</string>
-    <string name="atc3_alarm_active">Apex: the pump is raising an alarm — %1$s. It has to be cleared on the pump.</string>
+    <string name="atc3_alarm_active">Apex: alarm on the pump: %1$s. Clear it on the pump.</string>
     <string name="atc3_alarm_low_battery">low battery</string>
     <string name="atc3_alarm_bg_reminder">blood glucose reminder</string>
     <string name="atc3_alarm_button_error">button error</string>
@@ -48,7 +48,7 @@
     <string name="atc3_alarm_no_delivery">no delivery, which is the occlusion alarm</string>
     <string name="atc3_refill_note">Reservoir refilled, %1$.2f U used to fill the set</string>
     <string name="atc3_alarm_daily_limit">daily dose limit reached, the pump delivers nothing more today</string>
-    <string name="atc3_alarm_reservoir_empty">reservoir empty</string>
+    <string name="atc3_alarm_reservoir_empty">reservoir empty, refill needed</string>
     <string name="atc3_alarm_unknown">alarm code %1$d</string>
     <string name="atc3_smb_data_changed">Microbolus refused: a bolus the loop did not know of was found on the pump, or its records could not be read. The loop will recalculate.</string>
     <string name="atc3_smb_stale_iob">Microbolus refused: insulin was delivered on the pump after the loop calculated. The loop will recalculate with it included.</string>
@@ -185,4 +185,6 @@
     <string name="atc3_scanner_press_find">Press Find to look for the pump</string>
     <string name="atc3_scanner_found">Found %1$s. Enter its password and press Connect.</string>
     <string name="atc3_scanner_no_bluetooth">Bluetooth is off or not permitted, the pump cannot be looked for</string>
+    <string name="atc3_pump_stopped_by_aaps">Apex: AAPS stopped the pump because of its alarm (%1$s). Fix the cause, clear the alarm on the pump, then start the pump: on the pump itself or on the Apex tab. It does not start by itself.</string>
+    <string name="atc3_alarm_note">Apex: %1$s</string>
 </resources>

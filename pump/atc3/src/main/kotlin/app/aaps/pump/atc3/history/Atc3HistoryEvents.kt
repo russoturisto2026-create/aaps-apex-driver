@@ -8,6 +8,7 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.pump.atc3.Atc3AlarmText
 import app.aaps.pump.atc3.R
 import app.aaps.pump.atc3.keys.Atc3LongNonKey
 import app.aaps.pump.atc3.protocol.Atc3Alarm
@@ -125,7 +126,7 @@ class Atc3HistoryEvents @Inject constructor(
     }
 
     private fun alarmNote(record: Atc3AlarmRecord): String =
-        "ATC3: " + (record.alarm?.name ?: "alarm code ${record.code}")
+        rh.gs(R.string.atc3_alarm_note, Atc3AlarmText.label(rh, record.code))
 
     /** @return how many of the days AAPS did not have */
     suspend fun recordDailyTotals(days: List<Atc3DailyStats>): Int {
