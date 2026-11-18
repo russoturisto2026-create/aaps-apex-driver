@@ -20,12 +20,16 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
+import org.mockito.Mockito.verify
 
 /** A bolus journal read at a heartbeat while a cell flickers: what the reads hand on to the settling. */
 class FlickerReadTest {
 
-    private val reader = PictureReader(AAPSLoggerTest(), mock(ApexManager::class.java), FakeStore(), mock(ApexPumpState::class.java), mock(TbrFactsReader::class.java), mock(ApexTrace::class.java))
+    private val manager = mock(ApexManager::class.java)
+    private val reader = PictureReader(AAPSLoggerTest(), manager, FakeStore(), mock(ApexPumpState::class.java), mock(TbrFactsReader::class.java), mock(ApexTrace::class.java))
     private var reads = 0
 
     private fun answerOf(records: List<JournalSnapshot.Answered>) =
@@ -58,9 +62,16 @@ class FlickerReadTest {
     }
 
     @Test
-    fun `an answer with no record at all is silence - asked again, nothing is handed on after three reads`() {
+    fun `an answer with no record at all is silence - asked again, nothing is handed on after three reads, the pump is taken as not working`() {
         assertNull(reader.readJournal("bolus journal", { reads++; answerOf(emptyList()) }, BrokenRecordDeep::brokenBolus))
         assertEquals(3, reads)
+        verify(manager).pumpNotWorking(anyString())
+    }
+
+    @Test
+    fun `an answer with a record - the pump works`() {
+        assertNotNull(reader.readJournal("bolus journal", { reads++; answerOf(ten()) }, BrokenRecordDeep::brokenBolus))
+        verify(manager, never()).pumpNotWorking(anyString())
     }
 
     @Test

@@ -19,8 +19,8 @@ class BasalPeriodTest {
     private fun day(basalRaw: Int, tbrRaw: Int, bolusRaw: Int = 40, key: Long = today) =
         ApexDailyRecord(0, bolusRaw * 0.025, basalRaw * 0.025, tbrRaw * 0.025, key)
 
-    private fun step(start: BasalPeriod.Mark, mode: ExactBasalMode, atMs: Long, vararg days: ApexDailyRecord, broken: Boolean = false, settled: Boolean = true) =
-        BasalPeriod.step(start, mode, atMs, Delivered.DayRecord(days.toList(), broken), settled)
+    private fun step(start: BasalPeriod.Mark, atMs: Long, vararg days: ApexDailyRecord, broken: Boolean = false) =
+        BasalPeriod.step(start, atMs, Delivered.DayRecord(days.toList(), broken))
 
     @Test
     fun `the mark survives the store as one line`() {
@@ -39,50 +39,48 @@ class BasalPeriodTest {
     @Test
     fun `by heartbeats the next heartbeat closes the period, the same heartbeat does not`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20))
-        assertEquals(BasalPeriod.Step.Wait, step(start, ExactBasalMode.HEARTBEAT, tenOhFive, day(400, 20)))
-        assertEquals(BasalPeriod.Step.Close(3 * 0.025), step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(403, 20)))
+        assertEquals(BasalPeriod.Step.Wait, step(start, tenOhFive, day(400, 20)))
+        assertEquals(BasalPeriod.Step.Close(3 * 0.025), step(start, tenOhFive + 5 * minute, day(403, 20)))
     }
 
     @Test
     fun `off never closes`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20))
-        assertEquals(BasalPeriod.Step.Wait, step(start, ExactBasalMode.OFF, tenOhFive + 60 * minute, day(440, 20)))
     }
 
     @Test
-    fun `boluses first - an unsettled journal postpones, a broken day record postpones`() {
+    fun `a broken day record postpones`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20))
-        assertEquals(BasalPeriod.Step.Postpone("boluses"), step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(403, 20), settled = false))
-        assertEquals(BasalPeriod.Step.Postpone("days_broken"), step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(403, 20), broken = true))
+        assertEquals(BasalPeriod.Step.Postpone("days_broken"), step(start, tenOhFive + 5 * minute, day(403, 20), broken = true))
     }
 
     @Test
     fun `across the pump's midnight the old day is found below the new one and each day counts whole`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20, key = yesterday))
         // The new day from nothing on top, the old day closed at 410 + 30 below it.
-        val close = step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 25 * minute, day(6, 0, bolusRaw = 0), day(410, 30, key = yesterday))
+        val close = step(start, tenOhFive + 25 * minute, day(6, 0, bolusRaw = 0), day(410, 30, key = yesterday))
         assertEquals(BasalPeriod.Step.Close((10 + 10 + 6) * 0.025), close)
     }
 
     @Test
     fun `the day the period began in is gone or began over - the period begins anew`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20))
-        assertEquals(BasalPeriod.Step.Restart("kept_day_gone"), step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(3, 0, key = today + 86_400L)))
+        assertEquals(BasalPeriod.Step.Restart("kept_day_gone"), step(start, tenOhFive + 5 * minute, day(3, 0, key = today + 86_400L)))
         // The same date, but less than the kept day held, and no day without a date under it: begun over.
-        assertEquals(BasalPeriod.Step.Restart("kept_day_gone"), step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(3, 0)))
+        assertEquals(BasalPeriod.Step.Restart("kept_day_gone"), step(start, tenOhFive + 5 * minute, day(3, 0)))
     }
 
     @Test
     fun `the power was lost - the kept day goes on in the day without a date under the new one`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20))
-        val close = step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(2, 0, bolusRaw = 0), day(401, 20, key = 0L))
+        val close = step(start, tenOhFive + 5 * minute, day(2, 0, bolusRaw = 0), day(401, 20, key = 0L))
         assertEquals(BasalPeriod.Step.Close(3 * 0.025), close)
     }
 
     @Test
     fun `the basal of the period is in whole steps of the pump`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20))
-        val close = step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(407, 20)) as BasalPeriod.Step.Close
+        val close = step(start, tenOhFive + 5 * minute, day(407, 20)) as BasalPeriod.Step.Close
         assertEquals(7 * 0.025, close.units, 1e-9)
         assertEquals(7.0, close.units / 0.025, 1e-9)
     }
@@ -93,8 +91,8 @@ class BasalPeriodTest {
 
     private fun countStep(
         start: BasalPeriod.Mark, units: Double, boluses: Double = 0.0, pumpDay: Long = today / 86_400L,
-        duringBolus: Boolean = false, settled: Boolean = true, atMs: Long = tenOhFive + 5 * minute
-    ) = BasalPeriod.step(start, ExactBasalMode.HEARTBEAT, atMs, Delivered.Count(units, pumpDay), settled, duringBolus, boluses)
+        atMs: Long = tenOhFive + 5 * minute
+    ) = BasalPeriod.step(start, atMs, Delivered.Count(units, pumpDay), boluses)
 
     @Test
     fun `the count kind - the move of the count is the basal`() {
@@ -122,19 +120,10 @@ class BasalPeriodTest {
     }
 
     @Test
-    fun `the count kind - during our bolus the period is postponed, a day record period stays as it is`() {
-        assertEquals(BasalPeriod.Step.Postpone("bolus_runs"), countStep(countMark(10.0), 11.0, duringBolus = true))
-        val start = BasalPeriod.Mark(tenOhFive, day(400, 20))
-        val close = BasalPeriod.step(start, ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, Delivered.DayRecord(listOf(day(403, 20))), settled = true, duringBolus = true)
-        assertEquals(BasalPeriod.Step.Close(3 * 0.025), close)
-    }
-
-    @Test
-    fun `the count kind - waits at its own heartbeat, postpones on an unsettled journal, restarts when the kind changed`() {
-        assertEquals(BasalPeriod.Step.Wait, BasalPeriod.step(countMark(10.0), ExactBasalMode.HEARTBEAT, tenOhFive, Delivered.Count(10.1, today / 86_400L), settled = true))
-        assertEquals(BasalPeriod.Step.Postpone("boluses"), countStep(countMark(10.0), 10.2, settled = false))
+    fun `the count kind - waits at its own heartbeat, restarts when the kind changed`() {
+        assertEquals(BasalPeriod.Step.Wait, BasalPeriod.step(countMark(10.0), tenOhFive, Delivered.Count(10.1, today / 86_400L)))
         assertEquals(BasalPeriod.Step.Restart("day_record_kind_changed"), countStep(BasalPeriod.Mark(tenOhFive, day(400, 20)), 10.2))
-        assertEquals(BasalPeriod.Step.Restart("count_kind_changed"), step(countMark(10.0), ExactBasalMode.HEARTBEAT, tenOhFive + 5 * minute, day(403, 20)))
+        assertEquals(BasalPeriod.Step.Restart("count_kind_changed"), step(countMark(10.0), tenOhFive + 5 * minute, day(403, 20)))
     }
 
     @Test
@@ -165,16 +154,5 @@ class BasalPeriodTest {
         val close = countStep(countMark(10.0), 10.01, boluses = 0.1) as BasalPeriod.Step.Close
         assertEquals(0.0, close.units, 1e-9)
         assertEquals(0.1, close.overUnits, 1e-9)
-    }
-
-    @Test
-    fun `a period of the count kind begins only at a count with no bolus still to be written`() {
-        val count = Delivered.Count(10.0, today / 86_400L)
-        assertEquals(null, BasalPeriod.cannotBegin(count, settled = true, duringBolus = false))
-        assertEquals("journal_unsettled", BasalPeriod.cannotBegin(count, settled = false, duringBolus = false))
-        assertEquals("bolus_runs", BasalPeriod.cannotBegin(count, settled = true, duringBolus = true))
-        // The day record kind counts the basal by its own fields: no bolus can stand in its way.
-        val days = Delivered.DayRecord(listOf(day(400, 20)))
-        assertEquals(null, BasalPeriod.cannotBegin(days, settled = false, duringBolus = true))
     }
 }

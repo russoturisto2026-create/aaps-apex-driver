@@ -23,12 +23,14 @@ import app.aaps.pump.apex.protocol.CrcUtilTest
 import app.aaps.pump.apex.pulse.BolusGate
 import app.aaps.pump.apex.pulse.JournalRead
 import app.aaps.pump.apex.pulse.PictureReader
+import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.trace.ApexTrace
 import app.aaps.shared.tests.AAPSLoggerTest
 import kotlinx.coroutines.runBlocking
 import org.mockito.ArgumentMatchers
 import org.mockito.Mockito.doAnswer
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.mockingDetails
 import org.mockito.kotlin.any
 import org.mockito.kotlin.whenever
 
@@ -57,18 +59,33 @@ class JournalBench {
     private val aapsToday: AapsToday = mock(AapsToday::class.java)
     private val journal: BolusJournal
 
+    /** True: the work stops right after the first row reaches AAPS, as when the phone kills AAPS there. */
+    var faultAfterRow = false
+
+    /** The journal of the last heartbeat settled, what the pump answers again when nothing else is queued. */
+    private var lastAnswer: ApexJournalAnswer<ApexBolusRecord>? = null
+
+
+    private val trace: ApexTrace = mock(ApexTrace::class.java)
+
+
     /** The basal the rates order over any span, U; null while AAPS cannot tell. */
     var basalOfSpan: Double? = 0.0
 
     init {
-        doAnswer { again.removeFirstOrNull() }.`when`(manager).readBolusHistory()
+        // A read with nothing queued answers the journal of the last heartbeat settled: the pump holds the same records.
+        doAnswer { again.removeFirstOrNull() ?: lastAnswer }.`when`(manager).readBolusHistory()
         doAnswer { wholeReads++; whole.removeFirstOrNull() }.`when`(manager).readWholeBolusHistory()
         doAnswer { inv -> inv.getArgument<() -> ApexJournalAnswer<ApexBolusRecord>?>(1)()?.let { JournalRead(it, repeatedBroken = false) } }
             .`when`(reader).readJournal<ApexBolusRecord>(ArgumentMatchers.anyString(), anyArg(), anyArg())
-        doAnswer { inv -> written.add(inv.getArgument(0)); null }.`when`(carrier).carry(anyArg(), ArgumentMatchers.anyString())
+        doAnswer { inv ->
+            written.add(inv.getArgument(0))
+            if (faultAfterRow) throw IllegalStateException("the phone stopped right after the row went to AAPS")
+            null
+        }.`when`(carrier).carry(anyArg(), ArgumentMatchers.anyString())
         runBlocking { whenever(aapsToday.basalBetween(any(), any())).thenAnswer { basalOfSpan } }
         runBlocking { whenever(aapsToday.insulinActsMs()).thenAnswer { insulinActsMs } }
-        journal = BolusJournal(AAPSLoggerTest(), store, manager, reader, carrier, aapsToday, mock(Preferences::class.java), mock(ApexTrace::class.java))
+        journal = BolusJournal(AAPSLoggerTest(), store, manager, reader, carrier, aapsToday, mock(Preferences::class.java), mock(ApexPumpState::class.java), trace)
     }
 
     /** The journal as it stands before the test: [records], newest first, taken as the past, and today's bolus field at [dayRaw]. */
@@ -83,7 +100,7 @@ class JournalBench {
     /** Our bolus accepted at [acceptedAtMs], closed by the pump at [deliveredUnits]. */
     fun ours(acceptedAtMs: Long, units: Double, deliveredUnits: Double, type: String = "SMB"): Action {
         val account = BolusAccount(store, serial)
-        return account.commandAccepted(acceptedAtMs, units, type).also { account.finished(it, deliveredUnits, completed = true) }
+        return account.commandAccepted(acceptedAtMs, units, type).also { account.finished(it, deliveredUnits) }
     }
 
     /** Answers the pump gives when the journal is read again, in order. */
@@ -99,15 +116,28 @@ class JournalBench {
     fun thenWhole(records: List<JournalSnapshot.Answered>) = whole.addLast(answerOf(records))
 
     /**
-     * One answer settled as a heartbeat does it: [answer], newest first, with today's bolus field at
-     * [dayRaw], or no statistics when null. The day is kept when the answer is settled.
+     * One answer settled as a reconciliation with no bolus running does it, see `Reconciliation`: [answer],
+     * newest first, with today's bolus field at [dayRaw], or no statistics when null. Records that do not
+     * explain the field: the journal is read once more and settled against the statistics read anew,
+     * [freshDayRaw] when given. The day is kept only when the reconciliation succeeded: true then.
      */
-    fun settle(answer: List<JournalSnapshot.Answered>, dayRaw: Int?, nowMs: Long = NOW_MS): Boolean {
-        val days = dayRaw?.let { days(it) }
-        val settled = journal.settle(serial, answerOf(answer), days?.let { BolusSpanEnd.DayRecord(it) }, offsetMs = 0L, nowMs = nowMs, closeBasal = { basalClosed++; basalStands })
-        if (settled && days != null) BolusGate(store, serial).keep(JournalRead(days, repeatedBroken = false), nowMs)
-        return settled
+    fun settle(answer: List<JournalSnapshot.Answered>, dayRaw: Int?, nowMs: Long = NOW_MS, freshDayRaw: Int? = null): Boolean {
+        var days = dayRaw?.let { days(it) }
+        lastAnswer = answerOf(answer)
+        val checked = journal.settle(serial, answerOf(answer), days?.let { BolusSpanEnd.DayRecord(it) }, offsetMs = 0L, nowMs = nowMs, closeBasal = { basalClosed++; basalStands })
+            ?: return false
+        if (checked.offMove) {
+            val again = journal.readJournalAgain(serial, offsetMs = 0L) ?: return false
+            days = freshDayRaw?.let { days(it) } ?: days
+            journal.settle(serial, again, days?.let { BolusSpanEnd.DayRecord(it) }, offsetMs = 0L, nowMs = nowMs, closeBasal = { basalClosed++; basalStands }, readAgain = true)
+                ?: return false
+        }
+        days?.let { BolusGate(store, serial).keep(JournalRead(it, repeatedBroken = false), nowMs) }
+        return true
     }
+
+    /** The trace events of the settling, by name. */
+    fun traced(): List<String> = mockingDetails(trace).invocations.filter { it.method.name == "event" }.map { it.arguments[1] as String }
 
     /** The journal as it stands before the test on a pump without the statistics: [records], newest first, taken as the past, the count of the day at [countUnits] kept at [atMs]. */
     fun pastByCount(records: List<JournalSnapshot.Answered>, countUnits: Double, atMs: Long = BEFORE_MS, reservoirUnits: Double? = null) {
@@ -117,23 +147,27 @@ class JournalBench {
 
     /**
      * One answer settled as a heartbeat of a pump without the statistics does it: the count of the
-     * day at [countUnits] on the pump's day [pumpDay] with the reservoir at [reservoirUnits], read at [atMs]. The mark moves when the
-     * answer is settled, and is kept when none is, as the heartbeat does it.
+     * day at [countUnits] on the pump's day [pumpDay] with the reservoir at [reservoirUnits], read at [atMs]. The mark moves only
+     * when the answer is settled and the records explain the count, as a reconciliation that succeeded does it.
      */
     fun settleByCount(answer: List<JournalSnapshot.Answered>, countUnits: Double, atMs: Long = NOW_MS, pumpDay: Long = PUMP_DAY, reservoirUnits: Double? = null): Boolean {
         val end = BolusSpanEnd.Count(atMs, Delivered.Count(countUnits, pumpDay), reservoirUnits)
-        val settled = journal.settle(serial, answerOf(answer), end, offsetMs = 0L, nowMs = atMs, closeBasal = { basalClosed++; basalStands })
-        if (settled) {
+        val checked = journal.settle(serial, answerOf(answer), end, offsetMs = 0L, nowMs = atMs, closeBasal = { basalClosed++; basalStands })
+        if (checked != null && !checked.offMove) {
             BolusAccount(store, serial).clearSettledSinceHeartbeat()
             BolusCountMark(store, serial).move(end)
-        } else {
-            BolusCountMark(store, serial).moveIfAbsent(end)
         }
-        return settled
+        return checked != null
     }
 
-    /** One answer settled right after our own bolus, which has no count to give: as `BolusCommand` does it on a pump without the statistics. */
-    fun settleAfterOurBolus(answer: List<JournalSnapshot.Answered>): Boolean = journal.settle(serial, answerOf(answer), end = null, offsetMs = 0L, nowMs = NOW_MS)
+    /** One answer settled right after our own bolus, as `BolusCommand` does it on the full way: no statistics, no count, not read again. */
+    fun settleAfterOurBolus(answer: List<JournalSnapshot.Answered>): Boolean = journal.settle(serial, answerOf(answer), end = null, offsetMs = 0L, nowMs = NOW_MS, deep = false) != null
+
+    /** Our bolus confirmed by the last record read alone, [record], as `BolusCommand` does it on the short way. */
+    fun settleOurLast(record: JournalSnapshot.Answered): Boolean = journal.settleOurLast(serial, answerOf(listOf(record)), offsetMs = 0L, nowMs = NOW_MS)
+
+    /** True when [record] is the top of the journal copy kept. */
+    fun topIs(record: JournalSnapshot.Answered): Boolean = JournalSnapshot(store, serial).topIs(record.frame)
 
     fun rows(): List<AapsWrite.Bolus> = written.filterIsInstance<AapsWrite.Bolus>()
     fun notices(): List<AapsWrite.Notice> = written.filterIsInstance<AapsWrite.Notice>()

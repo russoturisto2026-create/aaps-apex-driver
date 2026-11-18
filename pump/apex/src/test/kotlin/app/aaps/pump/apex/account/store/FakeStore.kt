@@ -51,8 +51,8 @@ class FakeStore : ApexStore {
         list.add(action)
     }
 
-    override fun dropActions(serial: String, kind: ActionKind) {
-        actions[serial]?.removeAll { it.kind == kind }
+    override fun dropActions(serial: String) {
+        actions[serial]?.clear()
     }
 
     override fun clock(serial: String): ClockOffset? = clocks[serial]

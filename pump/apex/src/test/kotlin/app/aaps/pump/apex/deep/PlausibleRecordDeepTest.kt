@@ -28,7 +28,7 @@ class PlausibleRecordDeepTest {
     private fun answerOf(vararg records: JournalSnapshot.Answered) =
         ApexJournalAnswer(records.map { ApexRead(it.frame, ApexBolusRecord.decode(it.frame)!!) }, records.size)
 
-    private fun bounds(nowMs: Long = this.nowMs) = PlausibleRecordDeep(store, serial, nowMs)
+    private fun bounds(nowMs: Long = this.nowMs, newestReservoirUnits: Double? = null) = PlausibleRecordDeep(store, serial, nowMs, newestReservoirUnits)
 
     private fun keepStatus(reservoirUnits: Double) =
         store.saveSnapshot(serial, SnapshotKind.STATUS, Snapshot(listOf(JournalBench.statusFrame(reservoirUnits)), nowMs))
@@ -53,6 +53,15 @@ class PlausibleRecordDeepTest {
         keepStatus(10.0)
         assertNotNull(BrokenRecordDeep.brokenBolus(answerOf(twentyUnits), bounds = bounds()))
         assertNull(BrokenRecordDeep.brokenBolus(answerOf(record(two - 60L, 400, 400)), bounds = bounds()), "the reservoir itself is within bounds")
+    }
+
+    @Test
+    fun `a cartridge changed since the last reconciliation - the newest status read bounds the record`() {
+        val twelveUnits = record(two - 60L, 480, 480)
+        keepStatus(8.0)
+        assertNotNull(BrokenRecordDeep.brokenBolus(answerOf(twelveUnits), bounds = bounds()))
+        assertNull(BrokenRecordDeep.brokenBolus(answerOf(twelveUnits), bounds = bounds(newestReservoirUnits = 288.0)))
+        assertNotNull(BrokenRecordDeep.brokenBolus(answerOf(twelveUnits), bounds = bounds(newestReservoirUnits = 6.0)), "a lower newest status does not lower the bound below the last reconciliation, nor raise it")
     }
 
     @Test

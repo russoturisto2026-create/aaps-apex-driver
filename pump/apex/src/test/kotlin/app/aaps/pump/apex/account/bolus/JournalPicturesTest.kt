@@ -1,6 +1,5 @@
 package app.aaps.pump.apex.account.bolus
 
-import app.aaps.pump.apex.account.AapsWrite
 import app.aaps.pump.apex.account.NoticeKind
 import app.aaps.pump.apex.account.basal.BasalPeriodKeeper
 import app.aaps.pump.apex.account.bolus.JournalBench.Companion.NOW_MS
@@ -9,6 +8,7 @@ import app.aaps.pump.apex.account.bolus.JournalBench.Companion.at
 import app.aaps.pump.apex.account.bolus.JournalBench.Companion.ten
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -35,6 +35,24 @@ class JournalPicturesTest {
         assertEquals(0.5, row.amountUnits, 1e-9)
         assertEquals("SMB", row.type)
         assertTrue(bench.notices().isEmpty())
+        assertTrue(bench.openCommands().isEmpty())
+    }
+
+    @Test
+    fun `stopped right after the row went to AAPS - no mark is kept, the next answer writes the same row over itself`() {
+        bench.ours(acceptedAt, 0.5, 0.5)
+        bench.faultAfterRow = true
+        assertThrows(IllegalStateException::class.java) { bench.settle(listOf(at(0, 20)) + ten().take(9), dayRaw = 220) }
+        val first = bench.rows().single()
+        assertEquals(1, bench.openCommands().size)
+
+        bench.faultAfterRow = false
+        bench.written.clear()
+        assertTrue(bench.settle(listOf(at(0, 20)) + ten().take(9), dayRaw = 220))
+        val again = bench.rows().single()
+        assertEquals(first.pumpId, again.pumpId)
+        assertEquals(first.timestampMs, again.timestampMs)
+        assertEquals("SMB", again.type)
         assertTrue(bench.openCommands().isEmpty())
     }
 
@@ -304,16 +322,16 @@ class JournalPicturesTest {
     }
 
     @Test
-    fun `no new record, the bolus field moved by our 0_5 U - our command is closed, no row is made without a record`() {
+    fun `no new record, the bolus field moved by our 0_5 U - no row without a record, the note of our bolus stays`() {
         bench.ours(acceptedAt, 0.5, 0.5)
         assertTrue(bench.settle(ten(), dayRaw = 220))
 
         assertTrue(bench.rows().isEmpty())
-        assertTrue(bench.openCommands().isEmpty())
+        assertEquals(1, bench.openCommands().size)
     }
 
     @Test
-    fun `the record that came late is written by itself, once, at its own minute`() {
+    fun `the record that came late is still ours - written once, at our command, the note gone`() {
         bench.ours(acceptedAt, 0.5, 0.5)
         bench.settle(ten(), dayRaw = 220)
         bench.written.clear()
@@ -321,6 +339,41 @@ class JournalPicturesTest {
 
         val row = bench.rows().single()
         assertEquals(0.5, row.amountUnits, 1e-9)
-        assertEquals(TWO * 1000L, row.timestampMs)
+        assertEquals(acceptedAt, row.timestampMs)
+        assertEquals("SMB", row.type)
+        assertTrue(bench.openCommands().isEmpty())
+    }
+
+    @Test
+    fun `a bolus on the pump whose record is one step short of the bolus field - the row as the record says, the day kept`() {
+        assertTrue(bench.settle(listOf(at(0, 19)) + ten().take(9), dayRaw = 220))
+
+        assertEquals(0.475, bench.rows().single().amountUnits, 1e-9)
+    }
+
+    @Test
+    fun `a record that follows its bolus by a moment - the journal read again gives it, the statistics read anew agree, the day is kept by them`() {
+        // At the heartbeat the record is not there yet and the field already holds the whole bolus.
+        bench.thenAnswers(listOf(at(0, 40)) + ten().take(9))
+        assertTrue(bench.settle(ten(), dayRaw = 240, freshDayRaw = 240))
+        assertEquals(1.0, bench.rows().single().amountUnits, 1e-9)
+        // The day was kept by the statistics read anew: the next heartbeat sees nothing off.
+        bench.written.clear()
+        val offBefore = bench.traced().count { it == "bolus_records_off_move" }
+        assertTrue(bench.settle(listOf(at(0, 40)) + ten().take(9), dayRaw = 240))
+        assertTrue(bench.rows().isEmpty())
+        assertEquals(offBefore, bench.traced().count { it == "bolus_records_off_move" })
+    }
+
+    @Test
+    fun `a bolus record 0_1 U short of the bolus field - the journal read again, the row as the record says, the day is kept as it is`() {
+        assertTrue(bench.settle(listOf(at(0, 16)) + ten().take(9), dayRaw = 220))
+        assertEquals(0.4, bench.rows().single().amountUnits, 1e-9)
+    }
+
+    @Test
+    fun `a bolus record 0_1 U above the bolus field - the journal read again, the row as the record says, the day is kept as it is`() {
+        assertTrue(bench.settle(listOf(at(0, 24)) + ten().take(9), dayRaw = 220))
+        assertEquals(0.6, bench.rows().single().amountUnits, 1e-9)
     }
 }

@@ -69,7 +69,8 @@ sealed class ApexOverviewEvent {
 class DayLine(val aapsUnits: Double, val pumpUnits: Double?)
 
 /** The day by the AAPS rows and by the pump, both from one start to one moment of the comparison. */
-class DayTable(val atMs: Long, val fromText: String, val atText: String, val bolus: DayLine, val basal: DayLine, val total: DayLine)
+/** Today by AAPS and by the pump at the last reconciliation, [atMs]; [validatedText] is its time with seconds. */
+class DayTable(val atMs: Long, val fromText: String, val atText: String, val validatedText: String, val bolus: DayLine, val basal: DayLine, val total: DayLine)
 
 /** The driver's own blocks of the screen, under the status card AAPS draws. */
 @Immutable
@@ -79,6 +80,8 @@ class ApexScreenState(
     /** Basal, temporary basal, the pump's state, the link, serial, firmware, driver. */
     val pumpRows: List<PumpInfoRow> = emptyList(),
     val day: DayTable? = null,
+    /** What the probe at the last link setup found in the firmware, see [FirmwareDiagnosis]. */
+    val diagnosisRows: List<PumpInfoRow> = emptyList(),
     val pumpChosen: Boolean = false
 )
 
@@ -119,7 +122,7 @@ class ApexOverviewViewModel(
     private val _refreshing = MutableStateFlow(false)
     private val _dayTable = MutableStateFlow<DayTable?>(null)
     private val _exactBasal = MutableStateFlow(ExactBasalMode.of(preferences.get(ApexStringKey.ExactBasal)))
-    private val _heartbeatPeriod = MutableStateFlow(preferences.get(ApexIntKey.HeartbeatPeriod).takeIf { it in ApexConst.HEARTBEAT_PERIODS } ?: ApexConst.HEARTBEAT_PERIOD_DEFAULT)
+    private val _heartbeatPeriod = MutableStateFlow(ApexConst.heartbeatPeriod(preferences.get(ApexIntKey.HeartbeatPeriod)))
 
     /** True while the pull on the screen is being answered. */
     val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
@@ -158,9 +161,10 @@ class ApexOverviewViewModel(
             atMs = point.atMs,
             fromText = dateUtil.timeString(fromMs),
             atText = dateUtil.timeString(point.atMs),
-            bolus = DayLine(onPumpStep(aaps.bolusUnits), point.dayBolusUnits),
-            basal = DayLine(onPumpStep(aaps.basalUnits), point.dayBasalUnits),
-            total = DayLine(onPumpStep(aaps.totalUnits), point.counterUnits)
+            validatedText = dateUtil.timeStringWithSeconds(point.atMs),
+            bolus = DayLine(ApexProtocol.onStep(aaps.bolusUnits), point.dayBolusUnits),
+            basal = DayLine(ApexProtocol.onStep(aaps.basalUnits), point.dayBasalUnits),
+            total = DayLine(ApexProtocol.onStep(aaps.totalUnits), point.counterUnits)
         )
     }
 
@@ -168,7 +172,6 @@ class ApexOverviewViewModel(
      * The AAPS sum is rates over time and comes out between the pump's steps; it is shown on the
      * nearest step, so a thousandth of a unit is not shown as a gap.
      */
-    private fun onPumpStep(units: Double): Double = Math.round(units / ApexProtocol.DOSE_SCALE) * ApexProtocol.DOSE_SCALE
 
     /** The status card and the toolbar actions; the rows are the driver's own blocks, see [screenState]. */
     val uiState: StateFlow<PumpOverviewUiState> = combine(
@@ -183,8 +186,9 @@ class ApexOverviewViewModel(
         _refreshTrigger,
         communicationStatus.refreshTrigger,
         _dayTable,
+        pumpState.diagnosisFlow,
         tickerFlow(T.mins(1).msecs())
-    ) { _, _, day, _ ->
+    ) { _, _, day, _, _ ->
         buildScreenState(day)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), buildScreenState(null))
 
@@ -201,7 +205,34 @@ class ApexOverviewViewModel(
 
     private fun buildScreenState(day: DayTable?): ApexScreenState {
         if (!isPumpChosen()) return ApexScreenState()
-        return ApexScreenState(stateRows = stateRows(), pumpRows = pumpRows(), day = day, pumpChosen = true)
+        return ApexScreenState(stateRows = stateRows(), pumpRows = pumpRows(), day = day, diagnosisRows = diagnosisRows(), pumpChosen = true)
+    }
+
+    /** One row for each thing the probe looks for; one row only when the pump was not probed yet. */
+    private fun diagnosisRows(): List<PumpInfoRow> {
+        val found = pumpState.diagnosis ?: return listOf(PumpInfoRow(label = rh.gs(R.string.apex_diagnosis_probed), value = rh.gs(R.string.apex_diagnosis_not_yet)))
+        fun row(label: Int, has: Boolean?) = PumpInfoRow(label = rh.gs(label), value = rh.gs(answer(has)))
+        return listOf(
+            PumpInfoRow(label = rh.gs(R.string.apex_diagnosis_probed), value = dateUtil.dateAndTimeString(found.probedAtMs)),
+            PumpInfoRow(label = rh.gs(R.string.apex_label_firmware), value = pumpState.version?.firmwareText ?: rh.gs(R.string.apex_value_none)),
+            PumpInfoRow(label = rh.gs(R.string.apex_label_protocol), value = pumpState.version?.protocolText ?: rh.gs(R.string.apex_value_none)),
+            row(R.string.apex_diagnosis_status_v2, found.statusV2),
+            row(R.string.apex_diagnosis_last_tbr_command, found.lastTbrCommand),
+            row(R.string.apex_diagnosis_finished_tbr, found.finishedTbr),
+            row(R.string.apex_diagnosis_day_record, found.dayRecord),
+            row(R.string.apex_diagnosis_tbr_history, found.tbrHistory),
+            row(R.string.apex_diagnosis_last_bolus_record, found.lastBolusRecord),
+            row(R.string.apex_diagnosis_password_service, found.passwordService),
+            row(R.string.apex_diagnosis_password_protocol, found.passwordProtocol),
+            row(R.string.apex_diagnosis_password_sent, found.passwordSent)
+        )
+    }
+
+    /** The word for what the probe found: yes, no, or not known. */
+    private fun answer(has: Boolean?): Int = when (has) {
+        true  -> R.string.apex_diagnosis_yes
+        false -> R.string.apex_diagnosis_no
+        null  -> R.string.apex_diagnosis_unknown
     }
 
     /** The one thing worth saying above everything else: an alarm first, then a stopped pump, then a locked one. */

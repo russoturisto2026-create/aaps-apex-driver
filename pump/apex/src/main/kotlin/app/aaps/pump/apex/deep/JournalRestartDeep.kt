@@ -33,13 +33,13 @@ object JournalRestartDeep {
 
     /**
      * True when the boluses of the pump were last held against AAPS, at [lastHeldMs], longer ago
-     * at [nowMs] than the insulin in use acts, [insulinActsMs], or than [ACTS_NO_MORE_MS] when AAPS
-     * has no insulin to tell. True when they never were.
+     * at [nowMs] than both the insulin in use acts, [insulinActsMs], and [ACTS_NO_MORE_MS]: the
+     * larger of the two counts. True when they never were.
      */
     fun actsNoMore(lastHeldMs: Long?, nowMs: Long, insulinActsMs: Long?): Boolean =
-        lastHeldMs == null || nowMs - lastHeldMs > (insulinActsMs?.takeIf { it > 0 } ?: ACTS_NO_MORE_MS)
+        lastHeldMs == null || nowMs - lastHeldMs > maxOf(insulinActsMs ?: 0L, ACTS_NO_MORE_MS)
 
-    /** How long insulin is taken to act when AAPS has no insulin to tell: five hours. */
+    /** The shortest time insulin is taken to act, whatever insulin AAPS tells: five hours. */
     const val ACTS_NO_MORE_MS = 5 * 60 * 60_000L
 
     /** How many heartbeats in a row the whole journal is asked for before its silence is a fault. */

@@ -9,13 +9,14 @@ All tests were made on one pump with firmware 1.1.1.0 (protocol 4.12). The suppo
 versions (firmware from 1.0.6.25, protocol 4.10 and 4.11) was rebuilt from descriptions and from
 partial captures of the exchange. On such pumps something may not fit.
 
-**If you have a pump with firmware 1.0.6.25 or 1.0.6.27, please write to us** at the e-mail address
-shown in the profile of the owner of this repository. We need Bluetooth captures of the exchange
-with these pumps to find and fix what does not fit. We have a ready instruction: which captures
-are needed and how to make them on the phone. It takes about half an hour, and no pump setting has
-to be changed. We will send the instruction in answer to your letter. Do not post captures in the
-Issues: everyone can see them, and a capture holds the serial number of the pump and data of the
-phone.
+**If the firmware of your pump is not 1.1.1.0, please send us a screenshot.** When the pump is
+connected, the driver checks what the pump can do and shows it on the Apex pump screen:
+"More" → "Diagnosis". It shows the firmware, the protocol version and the list of objects the
+pump can read, each with "Yes", "No" or "Not known". We need a screenshot of the whole section.
+It is enough to connect the pump: no insulin has to be delivered for this.
+
+Post the screenshot in the Issues of this repository. The Diagnosis section does not show the
+serial number of the pump.
 
 ## What changed
 
@@ -62,12 +63,13 @@ The full list of changes is in `CHANGES.md`. The terms of use are in `DISCLAIMER
 версий (прошивки с 1.0.6.25, протокол 4.10 и 4.11) воссоздана по описаниям и по неполным захватам
 обмена. На таких помпах возможны несостыковки.
 
-**Если у вас помпа с прошивкой 1.0.6.25 или 1.0.6.27, пожалуйста, напишите нам** на адрес
-электронной почты, указанный в профиле владельца этого репозитория. Нам нужны захваты обмена
-Bluetooth с этих помп, чтобы найти и убрать несостыковки. У нас есть готовая инструкция: какие
-захваты нужны и как их сделать на телефоне. Это занимает около получаса, настройки помпы менять
-не нужно. Инструкцию пришлём в ответ на письмо. Захваты в Issues не выкладывайте: Issues видны
-всем, а в захвате есть серийный номер помпы и данные телефона.
+**Если у вас помпа с прошивкой не 1.1.1.0, пожалуйста, пришлите нам снимок экрана.** При
+подключении драйвер сам проверяет, что умеет помпа, и показывает это на экране помпы Apex:
+«Дополнительно» → «Диагностика». Там видны прошивка, версия протокола и список объектов, которые
+помпа умеет читать, с ответом «Да», «Нет» или «Неизвестно». Нужен снимок этого раздела целиком.
+Достаточно подключить помпу: подавать инсулин для этого не нужно.
+
+Снимок выложите в Issues этого репозитория. Серийного номера помпы в разделе «Диагностика» нет.
 
 ## Что изменилось
 

@@ -46,6 +46,9 @@ object ApexProtocol {
     /** Parameter of a periodic read: the latest records. */
     const val PARAMETER_LATEST: Byte = 0x01
 
+    /** Parameter of the bolus journal read with [GROUP_QUERY]: the last record alone. */
+    const val PARAMETER_LAST_RECORD: Byte = 0x00
+
     object ControlOpcode {
 
         const val WRITE_BASAL_PROFILE: Byte = 0x00
@@ -125,6 +128,12 @@ object ApexProtocol {
 
     /** The same dose or rate on the pump's scale. */
     fun sameDose(units: Double, otherUnits: Double): Boolean = abs(units - otherUnits) < DOSE_SCALE / 2
+
+    /** [units] rounded to the pump's step. */
+    fun onStep(units: Double): Double = Math.round(units / DOSE_SCALE) * DOSE_SCALE
+
+    /** Slack for doses held as doubles, U: two sums of the same steps can differ by this much. */
+    const val ROUNDING = 1e-6
 
     /** One raw unit of the reservoir, U. */
     const val RESERVOIR_SCALE = 0.001

@@ -7,7 +7,7 @@ package app.aaps.pump.apex
 object ApexConst {
 
     /** The driver's version, on its screen and in the log at start: the date of the change and its number that day. */
-    const val DRIVER_VERSION = "v4 2026.11.15.1"
+    const val DRIVER_VERSION = "v4 2026.11.18.2"
 
     /** The protocol from which the pump can be given a Bluetooth password. */
     const val PASSWORD_PROTOCOL_MAJOR = 4
@@ -15,13 +15,17 @@ object ApexConst {
 
     /**
      * The periods of the heartbeat the user can choose, minutes, see `ApexIntKey.HeartbeatPeriod`. Each
-     * of them divides the half hour, so the grid of the heartbeat holds :00 and :30. The period is set on
-     * every link, since the pump takes it from whichever client set it last.
+     * of them divides the half hour, so the grid of the heartbeat holds :00 and :30, and a heartbeat comes
+     * at the pump's midnight, see `HeartbeatGrid`. The period is set on every link, since the pump takes it
+     * from whichever client set it last.
      */
-    val HEARTBEAT_PERIODS = listOf(1, 2, 3, 5)
+    val HEARTBEAT_PERIODS = listOf(2, 3, 5, 6)
 
     /** The period of the heartbeat until the user chooses another, minutes. */
     const val HEARTBEAT_PERIOD_DEFAULT = 5
+
+    /** The heartbeat period the setting [chosen] stands for: one of [HEARTBEAT_PERIODS], else the default. */
+    fun heartbeatPeriod(chosen: Int): Int = chosen.takeIf { it in HEARTBEAT_PERIODS } ?: HEARTBEAT_PERIOD_DEFAULT
 
     /**
      * The pump profile slot that holds AAPS's basal schedule. AAPS owns the schedule; profiles stored in

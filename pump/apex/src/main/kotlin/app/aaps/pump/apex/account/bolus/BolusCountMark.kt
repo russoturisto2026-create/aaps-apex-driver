@@ -6,8 +6,8 @@ import app.aaps.pump.apex.account.store.ApexStore
 
 /**
  * The heartbeat a pump without the daily statistics counts its boluses from: when it came, the
- * pump's count of the day then, and its reservoir. It moves at each heartbeat whose bolus journal
- * was settled, so the span of the next answer runs from it. It has its own place in the store: the
+ * pump's count of the day then, and its reservoir. It moves at each reconciliation that succeeded, see
+ * `Reconciliation`, so the span of the next answer runs from it. It has its own place in the store: the
  * basal period has another.
  */
 class BolusCountMark(private val store: ApexStore, private val serial: String) {
@@ -41,11 +41,6 @@ class BolusCountMark(private val store: ApexStore, private val serial: String) {
 
     /** The next span runs from [end]. */
     fun move(end: BolusSpanEnd.Count) = store.putState(serial, STATE_KEY, Kept(end.atMs, end.count, end.reservoirUnits).encode())
-
-    /** The first count seen is kept, so that a span can begin: only when no mark is kept. */
-    fun moveIfAbsent(end: BolusSpanEnd.Count) {
-        if (get() == null) move(end)
-    }
 
     companion object {
 

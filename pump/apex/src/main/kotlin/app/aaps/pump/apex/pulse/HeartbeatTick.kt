@@ -8,13 +8,6 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.utils.MidnightTime
 import app.aaps.pump.apex.ApexLimits
 import app.aaps.pump.apex.ApexPumpClock
-import app.aaps.pump.apex.account.basal.BasalPeriodKeeper
-import app.aaps.pump.apex.account.basal.Delivered
-import app.aaps.pump.apex.account.bolus.BolusAccount
-import app.aaps.pump.apex.account.bolus.BolusCountMark
-import app.aaps.pump.apex.account.bolus.BolusJournal
-import app.aaps.pump.apex.account.bolus.BolusSpanEnd
-import app.aaps.pump.apex.account.tbr.TbrJournal
 import app.aaps.pump.apex.account.store.ApexStore
 import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.account.time.ApexClock
@@ -24,6 +17,7 @@ import app.aaps.pump.apex.manager.ApexManager
 import app.aaps.pump.apex.protocol.ApexBolusRecord
 import app.aaps.pump.apex.protocol.ApexDailyRecord
 import app.aaps.pump.apex.protocol.ApexResponseFrame
+import app.aaps.pump.apex.state.ApexAbilities
 import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.trace.ApexTrace
 import app.aaps.pump.apex.trace.ApexTraceCat
@@ -44,18 +38,19 @@ class ApexLinkSetup : CustomCommand {
 }
 
 /**
- * The driver's one procedure with the pump, run in answer to its heartbeat and at no other time.
- * First the heartbeat itself: a beat off the half-hour grid is moved onto it, see [HeartbeatGrid].
- * Step 1, the picture: the objects read by [PictureReader], the journals among them only when the
- * objects before them show something new. The bolus journal, when read, is settled against the
- * copy kept from the last answer, see [BolusJournal]: that is where every bolus row comes from,
- * ours and others'. The temporary basal part, read while a temporary basal runs or a row is held
- * open, is settled by [TbrJournal] against the open row: another's temporary basals get their
- * rows, the one held open that ended has its row closed. Then the basal
- * period, when the exact basal record is on, see [BasalPeriodKeeper]: boluses first, then the
- * basal. Step 3, the clock: written at the end, by the error the
- * heartbeat showed, when that is outside the corridor, see [ApexPumpClock.writeIfDue]. Before it the
- * pump's maximum bolus and basal are made AAPS's, see [ApexLimits].
+ * The driver's one procedure with the pump, run in answer to its heartbeat. A heartbeat that came
+ * during our bolus is answered when the bolus is settled. A beat off its grid is first moved onto it,
+ * see [HeartbeatGrid].
+ *
+ * 1. Status V1, and at once: does a bolus run, see [Reconciliation.quietStatus]. If one runs, nothing
+ *    more is read.
+ * 2. The rest of the picture, see [PictureReader]. The journals are read only when the objects before
+ *    them show something new.
+ * 3. The reconciliation, see [Reconciliation]: the picture against the status kept at the last one
+ *    that succeeded. Then the pump's maximum bolus and basal are made AAPS's, see [ApexLimits].
+ * 4. The clock, when it is due, see [ApexPumpClock.writeIfDue]. A write closes a period. So when the
+ *    clock is due, step 2 reads every object, the journals too, and the clock is written only when
+ *    step 3 succeeded. Else it waits for the next heartbeat.
  *
  * A heartbeat the pump does not answer keeps nothing: the exchange's watch on the link counts the
  * silence, and the next heartbeat runs the procedure again.
@@ -71,9 +66,7 @@ class HeartbeatTick(
     private val store: ApexStore,
     private val pumpState: ApexPumpState,
     private val pumpClock: ApexPumpClock,
-    private val bolusJournal: BolusJournal,
-    private val tbrJournal: TbrJournal,
-    private val periodKeeper: BasalPeriodKeeper,
+    private val reconciliation: Reconciliation,
     private val tbrCommand: TbrCommand,
     private val limits: ApexLimits,
     private val trace: ApexTrace
@@ -83,86 +76,50 @@ class HeartbeatTick(
     fun run(heartbeatAtMs: Long): Boolean {
         grid.onHeartbeat(heartbeatAtMs)
         val serial = pumpState.serialNumber
-        val picture = reader.read(heartbeatAtMs, serial) ?: return false
-        if (serial.isEmpty()) return true
+        val first = reader.readStatus() ?: return false
+        // The picture goes on from the last Status V1 the bolus check read.
+        val card = if (serial.isEmpty()) first else reconciliation.quietStatus(serial, first, dayRecord(serial)) ?: return true
+        if (serial.isEmpty()) return reader.read(heartbeatAtMs, serial, card) != null
         val offsetMs = ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs())
-        // The boluses are settled first. Only a faulty cell on a pump without the daily statistics asks for the
-        // temporary basal rows of this heartbeat before that: its amount is the pump's count less the basal of the AAPS rows.
-        var tbrSettled = false
-        val settleTbr = {
-            if (!tbrSettled) {
-                tbrSettled = true
-                settleTbrPart(serial, picture, offsetMs)
-            }
-            true
+        // A clock write closes a period: everything before it is read and settled first.
+        val clockDue = pumpClock.dueReason(serial, offsetMs)
+        val picture = reader.read(heartbeatAtMs, serial, card, readAll = clockDue != null) ?: return false
+        val result = reconciliation.run(serial, picture, offsetMs)
+        describe(result.picture)
+        // Only a reconciliation that succeeded is shown as a comparison of the day.
+        show(serial, result.picture, reconciled = result.succeeded)
+        limits.onHeartbeat(serial, result.picture.status)
+        if (clockDue != null) {
+            if (result.succeeded) writeClockIfDue(serial)
+            else aapsLogger.warn(LTag.PUMP, "Apex: the clock is due, $clockDue, but the reconciliation before it did not succeed; it waits for the next heartbeat")
         }
-        val settled = picture.boluses?.let { bolusJournal.settle(serial, it.answer, spanEnd(picture), offsetMs, picture.readAtMs, comparedAtMs = picture.heartbeatAtMs, closeBasal = settleTbr) } ?: true
-        settleTbr()
-        keep(serial, picture, keepDay = settled)
-        periodKeeper.onHeartbeat(serial, picture, settled)
-        describe(picture)
-        show(serial, picture, duringBolus = false)
-        limits.onHeartbeat(picture.status.settings)
-        writeClockIfDue(serial)
         return true
     }
 
     /**
-     * The heartbeat that came while our bolus runs, answered between its progress frames. The
-     * pump answers while it delivers, so the basal and temporary basal part of the picture is read
-     * on time: Status V1, the daily statistics, the last temporary basal command, the temporary
-     * basal journal by its gate. The bolus part is not judged: the record is not written until the
-     * bolus ends, the count of Status V1 already holds a part of it, and the bolus command settles
-     * it by the record when it ends. Nothing is kept of this picture either: the copies the next
-     * heartbeat compares with stay those of the last heartbeat before the bolus, so that the bolus,
-     * settled by then, is counted once and the deep look is not measured from a count taken half
-     * way through it. The basal period is closed by this heartbeat all the same, see
-     * [BasalPeriodKeeper]: the basal and temporary basal fields of the day record do not depend on
-     * the bolus, and the period's own mark is not one of those copies. The grid and the clock are
-     * left to the heartbeats between boluses too.
+     * Before a command of ours and at the link setup: true when a status is kept, or the start
+     * reconciliation, run now, succeeded, see [Reconciliation]. False: no command of ours goes before it.
+     * The basal period waits for the next heartbeat, so that its bounds stay on the heartbeats.
      */
-    fun runDuringBolus(heartbeatAtMs: Long) {
+    fun startIfNeeded(): Boolean {
         val serial = pumpState.serialNumber
-        aapsLogger.info(LTag.PUMP, "Apex: heartbeat during our bolus, the picture is read between its progress frames; nothing kept, the bolus part waits for the record")
-        trace.event(ApexTraceCat.STATE, "heartbeat_during_bolus", "at" to heartbeatAtMs)
-        val picture = reader.readDuringBolus(heartbeatAtMs, serial) ?: return
-        if (serial.isEmpty()) return
-        settleTbrPart(serial, picture, ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs()))
-        periodKeeper.onHeartbeat(serial, picture, settled = true, duringBolus = true)
-        describe(picture)
-        show(serial, picture, duringBolus = true)
+        if (serial.isEmpty()) return true
+        if (reconciliation.hasStatusKept(serial, dayRecord(serial))) return true
+        val first = reader.readStatus() ?: return false
+        val card = reconciliation.quietStatus(serial, first, dayRecord(serial)) ?: return false
+        val picture = reader.read(System.currentTimeMillis(), serial, card) ?: return false
+        val result = reconciliation.run(serial, picture, ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs()), withPeriod = false)
+        describe(result.picture)
+        show(serial, result.picture, reconciled = result.succeeded)
+        return result.succeeded
     }
 
-    /**
-     * The temporary basal rows made to stand as the status [card] shows the pump now, outside a
-     * heartbeat: asked by the bolus command before the pump's count closes a faulty cell. A
-     * reconciliation like any other, see [TbrGate]. False when the pump did not give the facts: the
-     * rows are not known to stand.
-     */
-    fun settleBasalAt(serial: String, card: ApexPumpState.StatusCard): Boolean {
-        val gate = TbrGate.decide(tbrJournal.last(serial)?.status, card.status)
-        val facts = if (gate.read) reader.tbrFacts(serial) ?: return false else null
-        tbrJournal.settle(serial, card, facts, ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs()), card.readAtMs)
-        return true
-    }
 
-    /**
-     * The temporary basal part of the heartbeat's [picture] settled: the heartbeat brings the pump up
-     * to the start of its minute, see `TbrJournal.settle`.
-     */
-    private fun settleTbrPart(serial: String, picture: PumpPicture, offsetMs: Long) =
-        tbrJournal.settle(serial, picture.status, picture.tbr, offsetMs, ApexClock.minuteStart(picture.heartbeatAtMs))
-
-    /** The screen's newest bolus is [top], the record read when our bolus ended: the rest of the picture stays that of the last heartbeat. */
-    fun showBolusEnded(serial: String, top: ApexBolusRecord) {
-        val shown = pumpState.lastPicture ?: return
-        val offsetMs = ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs())
-        pumpState.lastPicture = shown.withTopBolus(ApexClock.momentOf(top.clockSeconds, offsetMs), top.deliveredUnits)
-        rxBus.send(EventApexPumpDataChanged())
-    }
+    /** True when the pump gives the daily statistics, see [ApexAbilities]. */
+    private fun dayRecord(serial: String): Boolean = ApexAbilities.of(store, serial, pumpState.version?.firmwareText).dayRecord
 
     /** The few numbers the screen shows of the picture. */
-    private fun show(serial: String, picture: PumpPicture, duringBolus: Boolean) {
+    private fun show(serial: String, picture: PumpPicture, reconciled: Boolean) {
         val today = picture.days?.answer?.entries?.firstOrNull()?.record
         val topBolus = topBolus(serial, picture)
         val offsetMs = ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs())
@@ -175,8 +132,8 @@ class HeartbeatTick(
             topBolusUnits = topBolus?.deliveredUnits,
             clockErrorMs = manager.pumpClockErrorMs(),
             brokenJournals = brokenJournals(picture),
-            duringBolus = duringBolus,
-            dayFrom = if (duringBolus || picture.days != null && today == null) null else dayWindowStart(serial, picture, today, offsetMs)
+            reconciled = reconciled,
+            dayFrom = if (!reconciled || picture.days != null && today == null) null else dayWindowStart(serial, picture, today, offsetMs)
         )
         rxBus.send(EventApexPumpDataChanged())
     }
@@ -205,33 +162,6 @@ class HeartbeatTick(
         "bolus".takeIf { picture.boluses?.repeatedBroken == true }, "days".takeIf { picture.days?.repeatedBroken == true }
     )
 
-    /**
-     * What the pump gave at this heartbeat to tell how much went in as boluses over the span: the
-     * daily statistics read after the journal, or, on a pump without them, the count of Status V1.
-     */
-    private fun spanEnd(picture: PumpPicture): BolusSpanEnd? =
-        picture.days?.let { BolusSpanEnd.DayRecord(it.answer) } ?: (picture.delivered() as? Delivered.Count)?.let { BolusSpanEnd.Count(picture.heartbeatAtMs, it, picture.status.reservoirUnits) }
-
-    /**
-     * The picture kept for the next heartbeat: the status, and today's day, the start of the next bolus span.
-     * [keepDay] false: the bolus journal of the picture was not settled, and the span it closes stays open from the day kept before.
-     * A pump without the daily statistics keeps its count the same way, see [BolusCountMark]; when none is kept yet it is kept
-     * all the same, or a span that cannot begin would never close.
-     */
-    private fun keep(serial: String, picture: PumpPicture, keepDay: Boolean) {
-        store.transaction {
-            val count = spanEnd(picture) as? BolusSpanEnd.Count
-            if (keepDay) {
-                val days = picture.days
-                // With no daily statistics nothing compares the settled boluses with a day, so the list is cleared here.
-                if (days != null) BolusGate(store, serial).keep(days, picture.readAtMs) else BolusAccount(store, serial).clearSettledSinceHeartbeat()
-                count?.let { BolusCountMark(store, serial).move(it) }
-            } else {
-                count?.let { BolusCountMark(store, serial).moveIfAbsent(it) }
-            }
-        }
-    }
-
     private fun describe(picture: PumpPicture) {
         val card = picture.status
         val today = picture.days?.answer?.entries?.firstOrNull()?.record
@@ -259,16 +189,15 @@ class HeartbeatTick(
     }
 
     /**
-     * The clock, last. Around a zone change the running temporary basal is ended by the command and
-     * ordered again after the write, both as the commands do it for the loop. The journals need no
-     * settling here: the rows come from the commands, and the records are matched by their order.
+     * The clock, last, after a reconciliation that read everything and succeeded. Around a zone change
+     * the running temporary basal is ended by the command and ordered again after the write, both as the
+     * commands do it for the loop.
      */
     private fun writeClockIfDue(serial: String) {
         val offsetMs = ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs())
         pumpClock.writeIfDue(
             serial, offsetMs, System.currentTimeMillis(),
             endTbr = { tbrCommand.cancel(serial).failure },
-            settleJournals = { true },
             restartTbr = { rate, minutes -> tbrCommand.set(serial, rate, minutes, PumpSync.TemporaryBasalType.NORMAL).failure }
         )
     }

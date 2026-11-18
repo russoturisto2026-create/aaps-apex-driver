@@ -2,7 +2,6 @@ package app.aaps.pump.apex.pulse
 
 import app.aaps.pump.apex.account.basal.ExactBasalMode
 import app.aaps.pump.apex.account.journal.JournalSnapshot
-import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.account.time.ApexClock
 import app.aaps.pump.apex.state.ApexAbilities
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -83,7 +82,7 @@ class ApexReplayTwoWaysTest {
         fun writeClocksUpTo(ms: Long) {
             for (w in record.clockWrites.filter { it.changed && it.atMs <= ms && it !in applied }) {
                 applied.add(w)
-                val count = JournalSnapshot(rig.store, rig.serial, SnapshotKind.BOLUS).topSeq()
+                val count = JournalSnapshot(rig.store, rig.serial).topSeq()
                 ApexClock.clockWritten(rig.store, rig.serial, w.offsetMs, w.atMs, "replay", count)
             }
         }

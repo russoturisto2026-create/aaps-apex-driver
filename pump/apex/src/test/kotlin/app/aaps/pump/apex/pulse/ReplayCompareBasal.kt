@@ -56,7 +56,7 @@ object ReplayCompareBasal {
         if (near.isNotEmpty()) reasons.add("bolus command ${near.joinToString { "${it.op}@${ReplayTimeline.clock(it.ms)}" }} near the close")
         val inside = boluses.count { it.ms in from..a.to }
         if (inside > 0) reasons.add("$inside bolus command(s) inside the period")
-        val fromBeat = all.results.indexOfFirst { it.beat.heartbeatMs == from }
+        val fromBeat = all.results.indexOfFirst { ApexClock.minuteStart(it.beat.heartbeatMs) == from }
         if (fromBeat >= 0 && pumpDay(all, fromBeat) != pumpDay(all, a.toBeat)) reasons.add("the pump day changes in the period (${pumpDay(all, fromBeat)} to ${pumpDay(all, a.toBeat)})")
         file.clockWrites.filter { it.atMs in (from - ApexClock.MINUTE_MS)..(a.to + ApexClock.MINUTE_MS) }.forEach { reasons.add("clock write at ${ReplayTimeline.clock(it.atMs)}${if (it.changed) " (moved)" else " (same offset)"}") }
         if (a.from != n.from) reasons.add("the periods began at different heartbeats")

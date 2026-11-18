@@ -5,7 +5,6 @@ import app.aaps.pump.apex.account.bolus.BolusAccount
 import app.aaps.pump.apex.account.bolus.BolusRecordFrames.record
 import app.aaps.pump.apex.account.journal.JournalSnapshot
 import app.aaps.pump.apex.account.store.FakeStore
-import app.aaps.pump.apex.account.store.SnapshotKind
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -16,7 +15,7 @@ class BolusDeepTest {
 
     private val store = FakeStore()
     private val serial = "12345678"
-    private val journal = JournalSnapshot(store, serial, SnapshotKind.BOLUS)
+    private val journal = JournalSnapshot(store, serial)
     private val account = BolusAccount(store, serial)
     private val deep = BolusDeep(store, serial)
 
@@ -89,7 +88,7 @@ class BolusDeepTest {
         past()
         val acceptedAt = tenOClock * 1000L + 5_000L
         val ours = account.commandAccepted(acceptedAt, 0.8, "SMB")
-        account.finished(ours, 0.8, completed = true)
+        account.finished(ours, 0.8)
         // The only new record asks 0.3 U: it can be read, so it is written as it says.
         val found = settle(answerWith(record(tenOClock, 12, 12)))
 
@@ -120,7 +119,7 @@ class BolusDeepTest {
         past()
         // The pump took 0.65 U and gave nothing; our 0.2 U came later and has its record.
         val silent = account.commandAccepted(tenOClock * 1000L - 6 * 60_000L, 0.65, "SMB")
-        account.finished(silent, 0.0, completed = false)
+        account.finished(silent, 0.0)
         val acceptedAt = tenOClock * 1000L + 17_000L
         account.commandAccepted(acceptedAt, 0.2, "SMB")
 

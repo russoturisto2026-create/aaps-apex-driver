@@ -4,9 +4,7 @@ import app.aaps.pump.apex.account.AapsWrite
 import app.aaps.pump.apex.account.journal.JournalEntry
 import app.aaps.pump.apex.account.journal.JournalSnapshot
 import app.aaps.pump.apex.account.store.Action
-import app.aaps.pump.apex.account.store.ActionKind
 import app.aaps.pump.apex.account.store.ApexStore
-import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.account.time.ApexClock
 import app.aaps.pump.apex.deep.PlausibleRecordDeep
 import app.aaps.pump.apex.protocol.ApexBolusRecord
@@ -28,10 +26,10 @@ class BolusAccount(private val store: ApexStore, private val serial: String) {
      * the waiting commands ordered. A command left without a record is closed all the same, see
      * [closeAll].
      */
-    fun expects(added: JournalSnapshot.Added, nowMs: Long): Boolean {
+    fun expects(added: JournalSnapshot.Added, nowMs: Long, newestReservoirUnits: Double? = null): Boolean {
         val open = openActions().toMutableList()
         val previousTopAtMs = added.previousTopAtMs ?: return false
-        val bounds = PlausibleRecordDeep(store, serial, nowMs)
+        val bounds = PlausibleRecordDeep(store, serial, nowMs, newestReservoirUnits)
         return added.records.size <= open.size &&
             added.records.all { it.atMs >= previousTopAtMs && ApexBolusRecord.decode(it.frame)?.carriesExtendedPart == false && !bounds.implausible(it) } &&
             match(added.records, open).all { it != null }
@@ -97,27 +95,25 @@ class BolusAccount(private val store: ApexStore, private val serial: String) {
     fun clearSettledSinceHeartbeat() = store.putState(serial, STATE_SETTLED_SINCE_HEARTBEAT, null)
 
     /** Our bolus commands still waiting for their record, oldest first. */
-    internal fun openActions(): List<Action> = store.actions(serial).filter { it.kind == ActionKind.BOLUS && !it.done }.sortedBy { it.acceptedAtMs }
+    internal fun openActions(): List<Action> = store.actions(serial).filter { !it.done }.sortedBy { it.acceptedAtMs }
 
     /** Note that the pump accepted a bolus of ours: the record comes later and is found by its place. */
     fun commandAccepted(acceptedAtMs: Long, units: Double, type: String): Action =
         store.addAction(
             serial,
             Action(
-                kind = ActionKind.BOLUS,
                 acceptedAtMs = acceptedAtMs,
                 amount = units,
                 type = type,
-                journalTopSeq = JournalSnapshot(store, serial, SnapshotKind.BOLUS).topSeq()
+                journalTopSeq = JournalSnapshot(store, serial).topSeq()
             )
         )
 
     /** The pump reported progress of our running bolus. */
     fun progress(action: Action, seenUnits: Double) = store.updateAction(serial, action.copy(seenUnits = seenUnits))
 
-    /** The pump closed our bolus: [reportedUnits] is what it delivered, when [completed] by its completion frame. */
-    fun finished(action: Action, reportedUnits: Double, completed: Boolean) =
-        store.updateAction(serial, action.copy(seenUnits = reportedUnits, finished = completed))
+    /** The pump closed our bolus: [reportedUnits] is what it delivered. */
+    fun finished(action: Action, reportedUnits: Double) = store.updateAction(serial, action.copy(seenUnits = reportedUnits))
 
     /**
      * The journal answer after our commands is settled: every command is closed, found or not, and
@@ -126,7 +122,7 @@ class BolusAccount(private val store: ApexStore, private val serial: String) {
      */
     fun closeAll(): List<Action> {
         val open = openActions()
-        store.dropActions(serial, ActionKind.BOLUS)
+        store.dropActions(serial)
         return open
     }
 
@@ -146,7 +142,5 @@ class BolusAccount(private val store: ApexStore, private val serial: String) {
         const val STATE_SETTLED_SINCE_HEARTBEAT = "bolusesSettledSinceHeartbeat"
         private const val LIST_SEPARATOR = ";"
 
-        /** An amount on the pump's scale. */
-        fun onStep(units: Double): Double = Math.round(units / ApexProtocol.DOSE_SCALE) * ApexProtocol.DOSE_SCALE
     }
 }

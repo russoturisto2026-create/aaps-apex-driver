@@ -1,10 +1,11 @@
 package app.aaps.pump.apex.pulse
 
+import app.aaps.pump.apex.deep.TbrStartMinuteDeep
 import app.aaps.pump.apex.protocol.ApexFinishedTbr
 import app.aaps.pump.apex.protocol.ApexProtocol
 import app.aaps.pump.apex.protocol.ApexStatusV1
 import app.aaps.pump.apex.protocol.ApexTbrFields
-import kotlin.math.abs
+import app.aaps.pump.apex.account.time.ApexClock
 
 /**
  * What a reconciliation knows of the temporary basal beyond the status: the last finished one
@@ -27,14 +28,10 @@ class TbrFacts(
         val durationMinutes: Int
     ) {
 
-        /**
-         * The same temporary basal as [other]: the same rate, mode, length and start minute. The pump's
-         * count of minutes gone and its clock change at slightly different moments, so the start worked
-         * out from two statuses can be one minute apart.
-         */
+        /** The same temporary basal as [other]: the same rate, mode, length and start minute, see [TbrStartMinuteDeep]. */
         fun sameAs(other: Running): Boolean =
             ApexProtocol.sameDose(rate, other.rate) && mode == other.mode && durationMinutes == other.durationMinutes &&
-                abs(startClockSeconds - other.startClockSeconds) <= MINUTE_SECONDS
+                TbrStartMinuteDeep.sameStatusStart(startClockSeconds, other.startClockSeconds)
 
         /** What runs, with its unit, for logs. */
         val text: String get() = "$rate U/h for $durationMinutes min since key $startClockSeconds"
@@ -58,25 +55,22 @@ class TbrFacts(
 
         /**
          * This record is the temporary basal [running] a status showed: the same rate or percentage, mode,
-         * length and start minute. Its start is the clock of a status snapshot, which after a clock write
-         * can hold seconds; the start worked out from a status can be a minute off. Any field apart, it is
-         * another one: one that came after [running] and took its place.
+         * length and start minute, see [TbrStartMinuteDeep]. Any field apart, it is another one: one that
+         * came after [running] and took its place.
          */
         fun sameAs(running: Running): Boolean {
             val absolute = running.mode == ApexProtocol.TbrPayload.MODE_ABSOLUTE.toInt()
             val amount = if (absolute) rate?.let { ApexProtocol.sameDose(it, running.rate) } else percent?.let { it.toDouble() == running.rate }
             return amount == true && durationMinutes == running.durationMinutes &&
-                abs(Math.floorDiv(startClockSeconds, MINUTE_SECONDS) - Math.floorDiv(running.startClockSeconds, MINUTE_SECONDS)) <= 1
+                TbrStartMinuteDeep.sameRecordStart(startClockSeconds, running.startClockSeconds)
         }
     }
 
     companion object {
 
-        const val MINUTE_SECONDS = 60L
-
         /** The start of the minute the temporary basal began in, worked out from the status: the minute of its clock less the minutes gone. */
         fun startFromStatus(status: ApexStatusV1): Long =
-            Math.floorDiv(status.clockSeconds, MINUTE_SECONDS) * MINUTE_SECONDS - status.tbrElapsedMinutes * MINUTE_SECONDS
+            Math.floorDiv(status.clockSeconds, ApexClock.MINUTE_SECONDS) * ApexClock.MINUTE_SECONDS - status.tbrElapsedMinutes * ApexClock.MINUTE_SECONDS
 
         /** The temporary basal [status] shows running; null when none runs. */
         fun runningOf(status: ApexStatusV1): Running? =

@@ -9,16 +9,12 @@ enum class SnapshotKind { BOLUS, STATUS, DAILY }
  */
 data class Snapshot(val frames: List<ByteArray>, val readAtMs: Long)
 
-/** What the driver asked the pump to do with insulin. */
-enum class ActionKind { BOLUS }
-
 /**
- * The driver's record of its own action: the moment the pump accepted it, to the second, what was
+ * The driver's record of its own bolus: the moment the pump accepted it, to the second, what was
  * asked, and where the journal stood, so that the pump's record of it is found by its place.
  */
 data class Action(
     val id: Long = 0L,
-    val kind: ActionKind,
     /** UTC milliseconds of the pump's acknowledgement. */
     val acceptedAtMs: Long,
     /** Units of the bolus. */
@@ -27,14 +23,10 @@ data class Action(
     val type: String,
     /** The count of records the journal had given so far, read just before the command: the action's record comes after it. */
     val journalTopSeq: Long,
-    /** The offset the pump's clock stood in when the command went: the pump stamps the action's record in that wall time. */
-    val clockOffsetMs: Long = 0L,
     /** The number of the record found for this action, once found. */
     val recordSeq: Long? = null,
     /** Units the pump reported delivered: from its progress frames while the bolus runs, from its completion frame at the end. */
     val seenUnits: Double? = null,
-    /** The pump closed our bolus with its completion frame: [seenUnits] is what it delivered. */
-    val finished: Boolean = false,
     /** The pump's record of the action was found, or the action needs none. */
     val done: Boolean = false
 )
@@ -74,8 +66,8 @@ interface ApexStore {
     fun addAction(serial: String, action: Action): Action
     fun updateAction(serial: String, action: Action)
 
-    /** Drop every action of [kind]. */
-    fun dropActions(serial: String, kind: ActionKind)
+    /** Drop every action of the pump. */
+    fun dropActions(serial: String)
 
     fun clock(serial: String): ClockOffset?
 

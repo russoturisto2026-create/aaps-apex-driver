@@ -6,7 +6,6 @@ import app.aaps.pump.apex.account.bolus.BolusAccount
 import app.aaps.pump.apex.account.bolus.BolusRecordFrames.record
 import app.aaps.pump.apex.account.journal.JournalSnapshot
 import app.aaps.pump.apex.account.store.FakeStore
-import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.protocol.ApexBolusRecord
 import app.aaps.pump.apex.protocol.ApexResponseFrame
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -24,7 +23,7 @@ class BolusFaultTest {
 
     private val store = FakeStore()
     private val serial = "12345678"
-    private val journal = JournalSnapshot(store, serial, SnapshotKind.BOLUS)
+    private val journal = JournalSnapshot(store, serial)
     private val account = BolusAccount(store, serial)
     private val deep = BolusDeep(store, serial)
 
@@ -66,7 +65,7 @@ class BolusFaultTest {
     private fun bolusRows(writes: List<AapsWrite>) = writes.filterIsInstance<AapsWrite.Bolus>()
 
     private fun ourBolus(acceptedAtMs: Long, units: Double, seenUnits: Double, type: String = "NORMAL") =
-        account.commandAccepted(acceptedAtMs, units, type).also { account.finished(it, seenUnits, completed = false) }
+        account.commandAccepted(acceptedAtMs, units, type).also { account.finished(it, seenUnits) }
 
     @Test
     fun `the night of 14_05 - our 0_8 U stopped, the cell holds a record of 05_39 - the dose by the field, 0_225, at our command`() {

@@ -23,7 +23,7 @@ class TbrFactsReader(
     private val pumpState: ApexPumpState
 ) {
 
-    /** The facts, or null when the read was sent and got no sound answer, see `ApexExchange.ASKS`. */
+    /** The facts, or null when the read was sent and got no sound answer, see `ReadAgainDeep`. */
     fun read(serial: String): TbrFacts? {
         if (!ApexAbilities.of(store, serial, pumpState.version?.firmwareText).finishedTbr) return TbrFacts(null, endAsked = false)
         val answer = manager.readFinishedTbr() ?: run {

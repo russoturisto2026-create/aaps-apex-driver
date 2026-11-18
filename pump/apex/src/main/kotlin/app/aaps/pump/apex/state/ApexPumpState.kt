@@ -38,8 +38,6 @@ class ApexPumpState() {
 
         val deliveredTodayUnits: Double get() = status.deliveredTodayUnits
         val reservoirUnits: Double get() = status.reservoirUnits
-        val scheduledBasalRate: Double get() = status.scheduledBasalRate
-        val activeProfileIndex: Int get() = status.activeProfileIndex
         val suspended: Boolean get() = status.suspended
         val activeAlarmCodes: List<Int> get() = status.activeAlarmCodes
         val tbrActive: Boolean get() = status.tbrActive
@@ -75,7 +73,7 @@ class ApexPumpState() {
             _lastPicture.value = value
             when {
                 value == null        -> _reconcilePoint.value = null
-                !value.duringBolus   -> _reconcilePoint.value = ReconcilePoint(
+                value.reconciled     -> _reconcilePoint.value = ReconcilePoint(
                     atMs = value.heartbeatAtMs,
                     fromMs = value.dayFrom?.atMs,
                     counterUnits = value.counterUnits - (value.dayFrom?.counterUnits ?: 0.0),
@@ -86,12 +84,11 @@ class ApexPumpState() {
         }
 
     /**
-     * The last moment today is compared at: a heartbeat outside our bolus, the one moment every gap
-     * is laid side by side. A picture read during our bolus has part of the bolus in the pump's count
-     * and no AAPS row for it yet, so it is not one. Kept here and not by the screen, so the screen has
+     * The last moment today is compared at: a heartbeat whose reconciliation ended with nothing put off,
+     * the one moment every gap is laid side by side. A picture read while a bolus runs, ours or another's,
+     * or with the journal put off, has insulin in the pump's count that AAPS has no row for yet, so it is not one. Kept here and not by the screen, so the screen has
      * one to show as soon as it opens.
      */
-    val reconcilePoint: ReconcilePoint? get() = _reconcilePoint.value
     val reconcilePointFlow: StateFlow<ReconcilePoint?> = _reconcilePoint.asStateFlow()
 
     /** Phone time of the last answer that told the driver the pump's state, milliseconds. */
@@ -108,11 +105,19 @@ class ApexPumpState() {
         set(value) { _version.value = value }
     val versionFlow: StateFlow<ApexVersion?> = _version.asStateFlow()
 
+    private val _diagnosis = MutableStateFlow<FirmwareDiagnosis?>(null)
+
+    /** What the probe at the last link setup found in the firmware, see [FirmwareDiagnosis]; null before the first probe. */
+    var diagnosis: FirmwareDiagnosis?
+        get() = _diagnosis.value
+        set(value) { _diagnosis.value = value }
+    val diagnosisFlow: StateFlow<FirmwareDiagnosis?> = _diagnosis.asStateFlow()
+
     /** Whether the pump can have a Bluetooth password to change: its protocol is known and is the password protocol or newer. */
     val canChangePassword: Boolean get() = version?.protocolAtLeast(ApexConst.PASSWORD_PROTOCOL_MAJOR, ApexConst.PASSWORD_PROTOCOL_MINOR) == true
 
-    /** The basal profiles read from the pump, and the profile active when they were read. */
-    class Profiles(val rates: Array<DoubleArray>, val readForIndex: Int?)
+    /** The basal profiles read from the pump. */
+    class Profiles(val rates: Array<DoubleArray>)
 
     @Volatile var profiles: Profiles? = null
 
@@ -123,10 +128,11 @@ class ApexPumpState() {
     val activeProfileIndex: Int? get() = statusCard?.status?.activeProfileIndex
     val suspended: Boolean get() = statusCard?.status?.suspended ?: false
     val locked: Boolean get() = statusCard?.status?.locked ?: false
+
+    /** The pump takes no command: it is stopped, has an alarm, or is locked. */
+    val takesNoCommands: Boolean get() = suspended || activeAlarmCodes.isNotEmpty() || locked
     val tbrActive: Boolean get() = statusCard?.tbrActive ?: false
     val tbrRate: Double get() = statusCard?.tbrRate ?: 0.0
-    val tbrDurationMinutes: Int get() = statusCard?.tbrDurationMinutes ?: 0
-    val tbrElapsedMinutes: Int get() = statusCard?.tbrElapsedMinutes ?: 0
     val activeAlarmCodes: List<Int> get() = statusCard?.status?.activeAlarmCodes ?: emptyList()
     val settings: ApexSettings? get() = statusCard?.settings
 

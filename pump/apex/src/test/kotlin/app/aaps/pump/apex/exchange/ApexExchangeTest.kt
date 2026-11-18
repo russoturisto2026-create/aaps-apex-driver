@@ -1,9 +1,11 @@
 package app.aaps.pump.apex.exchange
 
 import app.aaps.pump.apex.ApexConst
+import app.aaps.pump.apex.deep.ReadAgainDeep
 import app.aaps.pump.apex.exchange.ApexExchange.Companion.askAgain
 import app.aaps.pump.apex.exchange.ApexExchange.Companion.clockErrorOf
 import app.aaps.pump.apex.exchange.ApexExchange.Companion.heartbeatClearUntil
+import app.aaps.pump.apex.exchange.ApexExchange.Companion.usableAnswer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -58,7 +60,7 @@ class ApexExchangeTest {
             assertTrue(askAgain(outcome, asked = 2, read = true))
             assertFalse(askAgain(outcome, asked = 3, read = true))
         }
-        assertEquals(3, ApexExchange.ASKS)
+        assertEquals(3, ReadAgainDeep.READS)
     }
 
     @Test
@@ -70,5 +72,16 @@ class ApexExchangeTest {
     fun `a lost link or an answer is not asked again`() {
         assertFalse(askAgain(ApexExchange.Ask.LINK_LOST, asked = 1, read = true))
         assertFalse(askAgain(ApexExchange.Ask.ANSWERED, asked = 1, read = true))
+    }
+
+    @Test
+    fun `no answer and an answer that cannot be read count alike toward the pump not working`() {
+        for (outcome in listOf(ApexExchange.Ask.SILENT, ApexExchange.Ask.BROKEN, ApexExchange.Ask.UNSOUND)) {
+            assertEquals(false, usableAnswer(outcome, silenceDropsLink = true), outcome.name)
+        }
+        assertEquals(true, usableAnswer(ApexExchange.Ask.UNDER_HEARTBEAT, silenceDropsLink = true))
+        assertNull(usableAnswer(ApexExchange.Ask.LINK_LOST, silenceDropsLink = true))
+        assertNull(usableAnswer(ApexExchange.Ask.UNSOUND, silenceDropsLink = false))
+        assertNull(usableAnswer(ApexExchange.Ask.SILENT, silenceDropsLink = false))
     }
 }

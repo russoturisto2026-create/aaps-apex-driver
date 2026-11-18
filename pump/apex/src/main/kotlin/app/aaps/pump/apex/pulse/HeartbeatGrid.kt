@@ -12,9 +12,14 @@ import dev.zacsweers.metro.SingleIn
 
 /**
  * Keeps the pump's heartbeat on the period the user chose, see [ApexManager.heartbeatPeriodMinutes],
- * and on the minutes of its grid: with 5 minutes :00, :05, ... :30, ...; with 1, 2 or 3 minutes
+ * and on the minutes of its grid: with 5 minutes :00, :05, ... :30, ...; with 2 or 3 minutes
  * likewise. Every period divides the half hour, so the grid holds :00 and :30. A period the user
  * changed goes to the pump at the next heartbeat.
+ *
+ * Why a grid at all. A heartbeat always comes at 00:00, so no basal period runs across the pump's
+ * midnight. On a pump without the daily statistics the pump's count of the day starts over at its
+ * midnight, and a period across it cannot be counted: its rows would stay as ordered. The heartbeat
+ * at :00 and :30 also reads the slow objects, see [onHalfHour].
  *
  * What the pump does: a new period rebuilds the grid from the last
  * heartbeat, the next one coming at last heartbeat + period; a command with the same period
@@ -87,7 +92,7 @@ class HeartbeatGrid(
         /** Whether [minute] is one the grid of [period] minutes holds: :00, then every [period] minutes. */
         fun onGrid(minute: Int, period: Int): Boolean = minute % period == 0
 
-        /** Whether [minute] closes a half hour, :00 or :30: the pump closes its basal window then, and the slow objects are read. */
+        /** Whether [minute] is :00 or :30: the heartbeat on it reads the slow objects (Status V2). The grid makes sure one comes. */
         fun onHalfHour(minute: Int): Boolean = minute % HALF_HOUR_MINUTES == 0
 
         private const val HALF_HOUR_MINUTES = 30

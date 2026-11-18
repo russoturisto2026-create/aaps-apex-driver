@@ -1,4 +1,4 @@
-package app.aaps.pump.apex.pulse
+package app.aaps.pump.apex.deep
 
 import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
@@ -14,25 +14,32 @@ import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 
-/** The heartbeat is overdue: the pump is asked, in its turn on the AAPS queue. See [HeartbeatWatch]. */
+/** The heartbeat is overdue: the pump is asked, in its turn on the AAPS queue, see [HeartbeatOverdueDeep]. */
 class ApexHeartbeatOverdue : CustomCommand {
 
     override val statusDescription: String = "Apex HEARTBEAT OVERDUE"
 }
 
 /**
- * The watch over the pump's heartbeat. The driver reads the pump only at its heartbeat, so a link
- * that went quiet without the stack saying so, or a pump whose heartbeat was turned off or set to
- * another period by another client, would leave the driver reading nothing at all. So when no
- * heartbeat came for [OVERDUE_PERIODS] periods and a little more, the status is read through the
- * AAPS queue. The queue brings the link up first when it is down. A read that reaches nothing counts
- * towards giving the link up, and the next ask brings a new one. A read that is answered proves the
- * pump: its heartbeat is set again, on the period the user chose. The pump is asked again no sooner
- * than one period later.
+ * The watch over the pump's heartbeat.
+ *
+ * The problem. The driver reads the pump only at its heartbeat. Two things can stop the heartbeat
+ * without anyone telling the driver: the link goes quiet while the Bluetooth stack still says it is
+ * up, or another client turns the pump's heartbeat off or sets another period. Then the driver reads
+ * nothing at all: no rows, no checks, and the loop runs on old data.
+ *
+ * When it applies. No heartbeat came for [OVERDUE_PERIODS] periods and [SLACK_MS] more, counted from
+ * the last heartbeat or from the start of the watch. On the plain path the heartbeat comes every
+ * period and this watch does nothing.
+ *
+ * The way out. The status is read through the AAPS queue; the queue brings the link up first when
+ * it is down. A read that reaches nothing counts towards giving the link up, and the next ask brings a
+ * new link. A read that is answered proves the pump: its heartbeat is set again, on the period the
+ * user chose. The pump is asked again no sooner than one period later.
  */
 @SingleIn(AppScope::class)
 @Inject
-class HeartbeatWatch(
+class HeartbeatOverdueDeep(
     private val aapsLogger: AAPSLogger,
     private val pumpState: ApexPumpState,
     private val manager: ApexManager,

@@ -55,7 +55,7 @@ class AapsCarrier(
             }
 
             is AapsWrite.StopTbr -> {
-                val done = runBlocking { pumpSync.syncStopTemporaryBasalWithPumpId(write.endMs, write.endPumpId, PumpType.APEX, serial) }
+                val done = runBlocking { pumpSync.syncStopTemporaryBasalWithPumpId(write.endMs, write.endMs, PumpType.APEX, serial) }
                 aapsLogger.info(LTag.PUMP, "Apex: temporary basal ends at ${write.endMs}, done $done")
             }
 
@@ -66,6 +66,7 @@ class AapsCarrier(
                     NoticeKind.JOURNAL_CLEAN_START   -> rh.gs(R.string.apex_notice_journal_clean_start, dateUtil.timeString(write.atMs))
                     NoticeKind.JOURNAL_UNLAID        -> rh.gs(R.string.apex_notice_journal_unlaid, dateUtil.timeString(write.atMs))
                     NoticeKind.IMPLAUSIBLE_ROW       -> rh.gs(R.string.apex_notice_implausible_row, dateUtil.timeString(write.atMs), write.units)
+                    NoticeKind.BASAL_ABOVE_MAX       -> rh.gs(R.string.apex_notice_basal_above_max, dateUtil.timeString(write.atMs), write.units)
                 }
                 aapsLogger.error(LTag.PUMP, "Apex: $text")
                 notificationManager.post(NotificationId.PUMP_ERROR, text, level = NotificationLevel.URGENT)

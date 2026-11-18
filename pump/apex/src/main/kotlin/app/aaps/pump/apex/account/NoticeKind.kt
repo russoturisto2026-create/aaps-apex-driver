@@ -16,5 +16,8 @@ enum class NoticeKind {
     JOURNAL_UNLAID,
 
     /** The pump reported a bolus of more than its reservoir held: nothing was written, see `PlausibleRecordDeep`. */
-    IMPLAUSIBLE_ROW
+    IMPLAUSIBLE_ROW,
+
+    /** The pump's count moved by more than its maximum basal can give over a basal period: the rest was written as a bolus, see `BasalPeriodDeep`. */
+    BASAL_ABOVE_MAX
 }

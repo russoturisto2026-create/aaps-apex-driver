@@ -3,6 +3,7 @@ package app.aaps.pump.apex.deep
 import app.aaps.pump.apex.account.AapsWrite
 import app.aaps.pump.apex.account.bolus.BolusAccount
 import app.aaps.pump.apex.account.store.ApexStore
+import app.aaps.pump.apex.protocol.ApexProtocol
 
 /**
  * The dose of the faulty cells of a span. Their records do not say what went
@@ -33,9 +34,9 @@ class BolusByDaysDeep(private val store: ApexStore, private val serial: String) 
         val rows = writes.filterIsInstance<AapsWrite.Bolus>()
         val row = rows.firstOrNull { it.pumpId == faultyRowId } ?: return Result(writes, change = null)
         val othersUnits = rows.filter { it !== row }.sumOf { it.amountUnits }
-        val dayUnits = BolusAccount.onStep(maxOf(0.0, restUnits - othersUnits))
+        val dayUnits = ApexProtocol.onStep(maxOf(0.0, restUnits - othersUnits))
         BolusAccount(store, serial).noteSettled(dayUnits - row.amountUnits)
         val changed = writes.map { if (it === row) row.copy(amountUnits = dayUnits) else it }
-        return Result(changed, Change(row.pumpId, row.amountUnits, dayUnits), shortUnits = maxOf(0.0, BolusAccount.onStep(othersUnits - restUnits)))
+        return Result(changed, Change(row.pumpId, row.amountUnits, dayUnits), shortUnits = maxOf(0.0, ApexProtocol.onStep(othersUnits - restUnits)))
     }
 }

@@ -6,6 +6,9 @@ object ApexFrame {
     /** The parameter of a request that takes none. */
     const val NO_PARAMETER: Byte = 0xAA.toByte()
 
+    /** The bytes of a frame as the logs show them: two hex digits each, a space between. */
+    fun hex(bytes: ByteArray): String = bytes.joinToString(" ") { "%02x".format(it) }
+
     val IDENTITY_PREFIX = String(byteArrayOf(0x41, 0x50, 0x45, 0x58), Charsets.US_ASCII)
 
     /** Digits in a pump serial number. */

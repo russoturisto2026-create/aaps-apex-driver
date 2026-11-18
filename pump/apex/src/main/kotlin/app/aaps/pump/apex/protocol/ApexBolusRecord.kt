@@ -48,7 +48,7 @@ data class ApexBolusRecord(
      * True for a record that may be a cell the pump read wrongly: no date, nothing asked for, or
      * nothing delivered. A bolus that delivered nothing leaves no record, so a record of one is a
      * cell cut by zeros after the asked amount. A broken record is told by one thing only: it does
-     * not come again. The answer is asked once more, see `PictureReader.readJournal`; a record that
+     * not come again. The answer is asked once more, see `ReadAgainDeep.journal`; a record that
      * repeats is a real one (a cancel sent with no bolus running leaves "asked 0, delivered 0.05" in
      * the journal).
      */

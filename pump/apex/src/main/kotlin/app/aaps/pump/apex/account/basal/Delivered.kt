@@ -1,6 +1,7 @@
 package app.aaps.pump.apex.account.basal
 
 import app.aaps.pump.apex.protocol.ApexDailyRecord
+import app.aaps.pump.apex.account.time.ApexClock
 
 /**
  * What the pump delivered up to a heartbeat, as far as the pump tells it. A pump with the daily
@@ -18,9 +19,7 @@ sealed interface Delivered {
         companion object {
 
             /** The pump's clock is read as a wall clock in whole seconds; its calendar day is the number of days in it. */
-            fun of(units: Double, clockSeconds: Long) = Count(units, Math.floorDiv(clockSeconds, SECONDS_PER_DAY))
-
-            private const val SECONDS_PER_DAY = 86_400L
+            fun of(units: Double, clockSeconds: Long) = Count(units, Math.floorDiv(clockSeconds, ApexClock.DAY_SECONDS))
         }
     }
 }

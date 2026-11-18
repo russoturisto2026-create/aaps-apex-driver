@@ -1,5 +1,8 @@
 package app.aaps.pump.apex.pulse
 
+import app.aaps.pump.apex.protocol.ApexProtocol
+import app.aaps.pump.apex.account.time.ApexClock
+
 /**
  * Where the comparison of the day on the screen starts, and what the pump had counted there.
  *
@@ -46,14 +49,12 @@ class DayWindow {
              * day taken from the status clock. The parts are left at zero and are never shown.
              */
             fun ofTotal(atMs: Long, clockSeconds: Long, offsetMs: Long, counterUnits: Double) =
-                Count(atMs, Math.floorDiv(clockSeconds, SECONDS_PER_DAY) * SECONDS_PER_DAY, offsetMs, counterUnits, 0.0, 0.0, parts = false)
-
-            private const val SECONDS_PER_DAY = 86_400L
+                Count(atMs, Math.floorDiv(clockSeconds, ApexClock.DAY_SECONDS) * ApexClock.DAY_SECONDS, offsetMs, counterUnits, 0.0, 0.0, parts = false)
         }
 
         /** Below [other] in some field: the same day cannot go back. */
         fun below(other: Count): Boolean =
-            counterUnits < other.counterUnits - ROUNDING || bolusUnits < other.bolusUnits - ROUNDING || basalUnits < other.basalUnits - ROUNDING
+            counterUnits < other.counterUnits - ApexProtocol.ROUNDING || bolusUnits < other.bolusUnits - ApexProtocol.ROUNDING || basalUnits < other.basalUnits - ApexProtocol.ROUNDING
     }
 
     @Volatile private var start: Count? = null
@@ -86,8 +87,5 @@ class DayWindow {
     }
 
     private companion object {
-
-        /** Slack for doses held as doubles. */
-        const val ROUNDING = 1e-6
     }
 }

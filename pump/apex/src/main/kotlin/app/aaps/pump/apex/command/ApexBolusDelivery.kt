@@ -43,8 +43,6 @@ class ApexBolusDelivery(
      */
     @Volatile private var bolusCancelAccepted: Boolean = false
 
-    /** When the pump last reported progress, for noticing a bolus that went quiet. */
-    @Volatile private var lastProgressAt: Long = 0L
 
     /** Progress frames of the running bolus so far: the pump's word that it took the command, when it gave no other. */
     @Volatile private var progressFrames: Int = 0
@@ -53,13 +51,10 @@ class ApexBolusDelivery(
     @Volatile private var heartbeatAtMs: Long = 0L
 
     /**
-     * The pump's heartbeat came at [atMs]. While our bolus runs it is answered between the progress
-     * frames, by [bolus]'s caller: true then, and the heartbeat is noted for it. False when no bolus
-     * of ours is being followed, or the one followed has ended (its completion frame or its cancel
-     * came), and the heartbeat is somebody else's to answer: the usual reconciliation, which then
-     * takes its turn behind the bolus command and sees the record settled. The heartbeat was once
-     * claimed in the moment between the completion frame and the end of the command, and nobody
-     * served it; the picture of that beat was lost.
+     * The pump's heartbeat came at [atMs]. While our bolus runs there is no reconciliation: true then,
+     * and the heartbeat is noted for [bolus]'s caller, which answers it once the bolus is settled. False
+     * when no bolus of ours runs, or it is over (its completion frame or its accepted cancel came): the
+     * heartbeat is then answered as usual, in its turn behind the bolus command.
      */
     fun heartbeatCame(atMs: Long): Boolean {
         if (!bolusInProgress || bolusFinished || bolusCancelAccepted) return false
@@ -68,16 +63,28 @@ class ApexBolusDelivery(
     }
 
     /**
+     * The heartbeat noted while the command was sent and the bolus never started (refused, or not taken):
+     * [bolus] returned before handing it on. Taken once; null when none waits.
+     */
+    fun takeNotedHeartbeat(): Long? = heartbeatAtMs.takeIf { it != 0L }?.also { heartbeatAtMs = 0L }
+
+    /**
      * Deliver a bolus and follow it to the end. [onAccepted] is called the moment the pump accepts it,
      * before anything can have been delivered: from then on AAPS counts the bolus whatever fails
      * after. A pump that answers the command with silence may have taken it all the same: its
      * progress frames, which follow the acceptance within a second or two, say so, and then the
      * bolus is followed as an accepted one. What is reported is what the pump last said; the pump's
-     * record is read by the caller. A heartbeat that comes meanwhile is handed to [onHeartbeat]
-     * between two progress frames: the pump answers requests while it delivers, and the frames of
-     * the bolus keep coming by themselves, so nothing of the bolus is lost while the picture is read.
+     * record is read by the caller. A heartbeat that comes meanwhile is handed to [onHeartbeat], which
+     * only notes it: nothing is read of the pump while the bolus runs.
+     *
+     * «A bolus runs» is a state of the whole driver: nothing is asked of the pump in it, neither a
+     * reconciliation nor a journal. Three things end it: the completion frame, the accepted cancel, or
+     * the time the bolus takes by its ordered dose, [durationMs] from the acceptance (see [BolusTiming]),
+     * and [BolusTiming.AFTER_END_MS] more, when its frames were lost on the way.
      */
-    suspend fun bolus(units: Double, onAccepted: suspend (Long) -> Unit, onProgress: suspend (Double) -> Unit, onHeartbeat: suspend (Long) -> Unit): ApexBolusOutcome {
+    suspend fun bolus(
+        units: Double, durationMs: Long, onAccepted: suspend (Long) -> Unit, onProgress: suspend (Double) -> Unit, onHeartbeat: suspend (Long) -> Unit
+    ): ApexBolusOutcome {
         bolusDelivered = 0.0
         bolusFinished = false
         bolusCancelAccepted = false
@@ -90,9 +97,10 @@ class ApexBolusDelivery(
             val answer = exchange.sendControlAndWait(ApexProtocol.ControlOpcode.BOLUS, payload)
             if (answer == ApexAnswer.REFUSED) return ApexBolusOutcome.Refused
             // The time to a first progress frame is counted from the pump's acceptance.
-            lastProgressAt = SystemClock.elapsedRealtime()
+            val acceptedAt = SystemClock.elapsedRealtime()
+            val overBy = acceptedAt + durationMs + BolusTiming.AFTER_END_MS
             if (answer == ApexAnswer.NONE) {
-                val until = lastProgressAt + FIRST_PROGRESS_WAIT_MS
+                val until = acceptedAt + FIRST_PROGRESS_WAIT_MS
                 while (progressFrames == 0 && !bolusFinished && SystemClock.elapsedRealtime() < until) SystemClock.sleep(BOLUS_POLL_MS)
                 if (progressFrames == 0 && !bolusFinished) return ApexBolusOutcome.NotSent
                 aapsLogger.warn(LTag.PUMP, "Apex: the pump did not answer the bolus command but delivers: its progress frames came")
@@ -111,9 +119,9 @@ class ApexBolusDelivery(
                     onHeartbeat(heartbeat)
                     continue
                 }
-                // A bolus that stops for any reason goes quiet: silence ends the watch, and the pump is asked.
-                if (SystemClock.elapsedRealtime() - lastProgressAt > BOLUS_STALL_MS) {
-                    aapsLogger.debug(LTag.PUMP, "Apex: no progress for ${BOLUS_STALL_MS}ms, checking the pump")
+                // No completion frame and no cancel: the bolus is over by its ordered dose, and its record written.
+                if (SystemClock.elapsedRealtime() >= overBy) {
+                    aapsLogger.warn(LTag.PUMP, "Apex: the bolus of $units U is over by its time, its completion frame did not come")
                     break
                 }
                 SystemClock.sleep(BOLUS_POLL_MS)
@@ -140,10 +148,10 @@ class ApexBolusDelivery(
      * Stop the running bolus, keeping what it delivered. Sent only while a bolus runs: with none, the
      * pump can write a record of its own. The watch ends only once the pump has accepted the cancel.
      */
-    fun stopBolus(): Boolean {
+    fun stopBolus() {
         if (!bolusInProgress) {
             aapsLogger.warn(LTag.PUMP, "Apex: no bolus is running, not sending a cancel")
-            return true
+            return
         }
         val sent = exchange.sendControlAndWait(
             ApexProtocol.ControlOpcode.CANCEL_BOLUS,
@@ -156,7 +164,6 @@ class ApexBolusDelivery(
             // The bolus is still running as far as anyone knows, so do not pretend it was stopped.
             aapsLogger.error(LTag.PUMP, "Apex: the pump did not accept the cancel, the bolus goes on being watched")
         }
-        return sent
     }
 
     /** A progress frame of the running bolus. */
@@ -168,7 +175,6 @@ class ApexBolusDelivery(
             return
         }
         bolusDelivered = frame.u16le(2) * ApexProtocol.DOSE_SCALE
-        lastProgressAt = SystemClock.elapsedRealtime()
         progressFrames++
         exchange.noteUnaskedFrame()
         aapsLogger.debug(LTag.PUMPCOMM, "Apex: bolus progress $bolusDelivered U")
@@ -190,9 +196,6 @@ class ApexBolusDelivery(
 
         /** How often progress is reported while the pump delivers. */
         private const val BOLUS_POLL_MS = 500L
-
-        /** How long the pump may be silent before its bolus is taken to be over and its record is asked for. */
-        private const val BOLUS_STALL_MS = 15_000L
 
         /** How long a command the pump did not answer waits for a first progress frame before it counts as not taken. */
         private const val FIRST_PROGRESS_WAIT_MS = 5_000L

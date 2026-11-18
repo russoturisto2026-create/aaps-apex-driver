@@ -18,7 +18,10 @@ class JournalEntry(val seq: Long, val frame: ApexResponseFrame, val clockSeconds
  * (see [JournalOverlay]) to find the records new since, and then takes its place. Every new record
  * gets the next number; the count of records given so far is the only thing kept besides the answer.
  */
-class JournalSnapshot(private val store: ApexStore, private val serial: String, private val kind: SnapshotKind) {
+class JournalSnapshot(private val store: ApexStore, private val serial: String) {
+
+    /** The bolus journal: the only journal the driver follows by its records. */
+    private val kind = SnapshotKind.BOLUS
 
     /** One record of an answer: its frame and its stamp as the protocol decoded it. */
     class Answered(val frame: ApexResponseFrame, val clockSeconds: Long)
@@ -54,6 +57,24 @@ class JournalSnapshot(private val store: ApexStore, private val serial: String, 
     }
 
     /**
+     * Put [record], the pump's last bolus record read alone, on top of the last answer kept, as the one
+     * record new since it, and keep the result as the last answer. Only when the top of the kept answer
+     * is known to be the record right below it: read alone just before, see `BolusCommand`. Null when no
+     * answer is kept, or [record] is the kept top itself: nothing is new.
+     */
+    fun takeOnTop(record: Answered, offsetMs: Long, nowMs: Long): Added? {
+        val kept = store.snapshot(serial, kind) ?: return null
+        val below = kept.frames.map { ApexResponseFrame(it) }
+        if (below.firstOrNull()?.recordIdentity()?.contentEquals(record.frame.recordIdentity()) == true) return null
+        val keptAnswered = below.map { Answered(it, ApexBolusRecord.decode(it)?.clockSeconds ?: return null) }
+        return keep(listOf(record) + keptAnswered, newCount = 1, past = false, offsetMs, nowMs)
+    }
+
+    /** True when the newest record of the last answer kept is [frame]'s record. */
+    fun topIs(frame: ApexResponseFrame): Boolean =
+        store.snapshot(serial, kind)?.frames?.firstOrNull()?.let { ApexResponseFrame(it).recordIdentity().contentEquals(frame.recordIdentity()) } == true
+
+    /**
      * Keep [answer] as the start of a new journal: nothing of the last answer is left in the pump, see
      * `JournalRestartDeep`. Its records are numbered and taken as the past, as on a first read.
      */
@@ -70,9 +91,9 @@ class JournalSnapshot(private val store: ApexStore, private val serial: String, 
         val topBefore = topSeq()
         val previousReadAtMs = store.snapshot(serial, kind)?.readAtMs?.takeIf { it > 0 }
         // The records below the new ones are the last answer's, newest first: the first has the number topBefore.
-        val previousTopAtMs = if (past) null else answer.drop(newCount).mapIndexed { i, it -> momentOf(it.clockSeconds, topBefore - i, offsetMs, nowMs) }
+        val previousTopAtMs = if (past) null else answer.drop(newCount).mapIndexed { i, it -> momentOf(it.clockSeconds, topBefore - i, offsetMs) }
             .filter { it <= nowMs + PlausibleRecordDeep.FUTURE_MARGIN_MS }.maxOrNull()
-        val records = number(answer.take(newCount), offsetMs, nowMs)
+        val records = number(answer.take(newCount), offsetMs)
         store.saveSnapshot(serial, kind, Snapshot(answer.take(ApexProtocol.ALIAS_ANSWER_FRAMES).map { it.frame.raw }, nowMs))
         return Added(records, firstRead = past, previousTopAtMs = previousTopAtMs, previousReadAtMs = previousReadAtMs)
     }
@@ -91,19 +112,19 @@ class JournalSnapshot(private val store: ApexStore, private val serial: String, 
     /** The count of records given so far: the number of the newest one. */
     fun topSeq(): Long = store.state(serial, counterKey)?.toLongOrNull() ?: 0L
 
-    private fun number(newestFirst: List<Answered>, offsetMs: Long, nowMs: Long): List<JournalEntry> {
+    private fun number(newestFirst: List<Answered>, offsetMs: Long): List<JournalEntry> {
         var seq = topSeq()
         val entries = newestFirst.asReversed().map {
             ++seq
-            JournalEntry(seq, it.frame, it.clockSeconds, momentOf(it.clockSeconds, seq, offsetMs, nowMs))
+            JournalEntry(seq, it.frame, it.clockSeconds, momentOf(it.clockSeconds, seq, offsetMs))
         }
         if (entries.isNotEmpty()) store.putState(serial, counterKey, seq.toString())
         return entries
     }
 
     /** The moment of a stamp of record number [seq]: in the offset the pump stood in when it stamped it. */
-    private fun momentOf(clockSeconds: Long, seq: Long, offsetMs: Long, nowMs: Long): Long =
-        ApexClock.momentOfRecord(store, serial, kind, seq, clockSeconds, offsetMs, nowMs)
+    private fun momentOf(clockSeconds: Long, seq: Long, offsetMs: Long): Long =
+        ApexClock.momentOfRecord(store, serial, seq, clockSeconds, offsetMs)
 
     private val counterKey get() = "$COUNTER_KEY.${kind.name}"
 

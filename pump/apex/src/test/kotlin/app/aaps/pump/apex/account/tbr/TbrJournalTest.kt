@@ -60,7 +60,7 @@ class TbrJournalTest {
     /** Our command done: the status [frame] read after it at [atMs]. The row itself is the command's, not the journal's. */
     private fun ordered(frame: ApexResponseFrame, atMs: Long) = journal.ordered(serial, card(frame, atMs))
 
-    private fun stop(atMs: Long) = AapsWrite.StopTbr(atMs, atMs)
+    private fun stop(atMs: Long) = AapsWrite.StopTbr(atMs)
     private fun row(stampMs: Long, startMs: Long, rate: Double, lengthMs: Long) = AapsWrite.Tbr(stampMs, startMs, rate, true, lengthMs, AapsWrite.NORMAL)
 
     /** Ours: 1.5 U/h for 30 min ordered at 9:00:12, the status after it read at 9:00:14. */
@@ -193,6 +193,17 @@ class TbrJournalTest {
     fun `without the last finished one - ours ends where the next one began`() {
         ours()
         journal.settle(serial, card(running(80, 30, elapsed = 2, clock = key(9, 5, 0)), ms(9, 5)), TbrFacts(null, endAsked = false), 0L, ms(9, 5))
+        assertEquals(listOf(stop(ms(9, 3, 30)), row(ms(9, 3), ms(9, 3, 30), 2.0, 30 * 60_000L)), written)
+    }
+
+    @Test
+    fun `before our cancel the last finished one is not read - another's that replaced ours gets its row by the status, once`() {
+        ours()
+        // Another's 2 U/h began at 9:03; the read before our cancel at 9:05 has no 0x0B.
+        journal.settle(serial, card(running(80, 30, elapsed = 2, clock = key(9, 5, 0)), ms(9, 5)), TbrFacts(null, endAsked = false), 0L, ms(9, 5))
+        // Our cancel cut it at 9:05:02 (the row of the command), the status after it is the last reconciliation.
+        ordered(none(key(9, 5, 4)), ms(9, 5, 4))
+        heartbeat(none(key(9, 10)), ms(9, 10), finished(9, 3, 9, 5, result = ApexFinishedTbr.Offset.RESULT_CANCELLED_BY_COMMAND, rateRaw = 80))
         assertEquals(listOf(stop(ms(9, 3, 30)), row(ms(9, 3), ms(9, 3, 30), 2.0, 30 * 60_000L)), written)
     }
 

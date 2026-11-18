@@ -45,6 +45,16 @@ class JournalCountFaultTest {
     }
 
     @Test
+    fun `the basal rows of the span do not stand - nothing written, the answer waits for the next read`() {
+        bench.basalStands = false
+        assertFalse(bench.settleByCount(listOf(oldCell(), at(0, 12)) + ten().take(8), countUnits = 11.5))
+
+        assertEquals(1, bench.basalClosed)
+        assertTrue(bench.written.isEmpty())
+        assertTrue(bench.topIs(ten().first()))
+    }
+
+    @Test
     fun `two faulty cells in one span - one row with the whole rest`() {
         assertTrue(bench.settleByCount(listOf(oldCell(), at(-2, 8)) + ten().take(8), countUnits = 11.0))
 
@@ -95,40 +105,51 @@ class JournalCountFaultTest {
     }
 
     @Test
-    fun `a sound answer is not held against the count - rows as the records say, AAPS is not asked for the basal`() {
+    fun `a sound answer is held against the count - when AAPS cannot tell the basal the rows stand as the records say`() {
         bench.basalOfSpan = null
         assertTrue(bench.settleByCount(listOf(at(0, 12)) + ten().take(9), countUnits = 15.0))
 
         assertEquals(listOf(0.3), amounts())
         assertTrue(bench.notices().isEmpty())
-        assertEquals(0, bench.basalClosed)
+        assertEquals(1, bench.basalClosed)
     }
 
     @Test
-    fun `no count kept yet - a cell of nobody's is taken back, the next heartbeat settles it over its own span`() {
+    fun `a sound answer that explains the count less the basal is a reconciliation that succeeded`() {
+        bench.basalOfSpan = 0.2
+        assertTrue(bench.settleByCount(listOf(at(0, 12)) + ten().take(9), countUnits = 10.5))
+        assertEquals(listOf(0.3), amounts())
+        assertEquals(NOW_MS, BolusCountMark(bench.store, bench.serial).get()!!.atMs)
+    }
+
+    @Test
+    fun `a sound answer that leaves the count unexplained keeps no count, so that a bolus that runs is asked about`() {
+        bench.basalOfSpan = 0.2
+        assertTrue(bench.settleByCount(listOf(at(0, 12)) + ten().take(9), countUnits = 15.0))
+        assertEquals(listOf(0.3), amounts())
+        assertEquals(BEFORE_MS, BolusCountMark(bench.store, bench.serial).get()!!.atMs)
+    }
+
+    @Test
+    fun `no count kept - the start - a cell of nobody's gets no amount and the user is told`() {
         val fresh = JournalBench()
         fresh.past(ten(), dayRaw = 200)
         fresh.basalOfSpan = 0.2
-        assertFalse(fresh.settleByCount(listOf(oldCell()) + ten().take(9), countUnits = 10.0, atMs = NOW_MS))
-        assertTrue(fresh.written.isEmpty())
-
-        assertTrue(fresh.settleByCount(listOf(oldCell()) + ten().take(9), countUnits = 10.9, atMs = later))
-        assertEquals(listOf(0.7), amounts(fresh))
+        assertTrue(fresh.settleByCount(listOf(oldCell()) + ten().take(9), countUnits = 10.0, atMs = NOW_MS))
+        assertTrue(fresh.rows().none { it.amountUnits > 0.0 })
+        assertTrue(fresh.notices().isNotEmpty())
     }
 
     @Test
-    fun `no count kept yet - the cell of our command is taken back too, the next heartbeat settles it at our command`() {
+    fun `no count kept - the start - the cell of our command gets no amount, the user is told, the command is closed`() {
         val fresh = JournalBench()
         fresh.past(ten(), dayRaw = 200)
         fresh.basalOfSpan = 0.2
         fresh.ours(acceptedAt, 0.5, 0.5)
-        assertFalse(fresh.settleByCount(listOf(oldCell()) + ten().take(9), countUnits = 10.0, atMs = NOW_MS))
-        assertTrue(fresh.written.isEmpty())
-        assertEquals(1, fresh.openCommands().size)
-
-        assertTrue(fresh.settleByCount(listOf(oldCell()) + ten().take(9), countUnits = 10.9, atMs = later))
-        assertEquals(listOf(0.7), amounts(fresh))
-        assertEquals(acceptedAt, fresh.rows().single().timestampMs)
+        assertTrue(fresh.settleByCount(listOf(oldCell()) + ten().take(9), countUnits = 10.0, atMs = NOW_MS))
+        assertTrue(fresh.rows().none { it.amountUnits > 0.0 })
+        assertTrue(fresh.notices().isNotEmpty())
+        assertTrue(fresh.openCommands().isEmpty())
     }
 
     @Test

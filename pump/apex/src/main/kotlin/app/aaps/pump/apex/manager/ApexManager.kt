@@ -40,6 +40,8 @@ import app.aaps.pump.apex.protocol.ApexVersion
 import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.trace.ApexTrace
 import app.aaps.pump.apex.trace.ApexTraceCat
+import app.aaps.pump.apex.deep.ReadAgainDeep
+import app.aaps.pump.apex.command.AwaitResult
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.SingleIn
@@ -83,6 +85,9 @@ class ApexManager(
 
     // Reads
 
+    /** Three reads in a row brought nothing, [why]: the pump is taken as not working, see [ApexExchange.pumpNotWorking]. */
+    fun pumpNotWorking(why: String) = exchange.pumpNotWorking(why)
+
     /** Read Status V1, what most of what the driver knows comes from. A frame that does not decode is asked for again. */
     fun readStatus(): ApexPumpState.StatusCard? =
         exchange.sendAndWait(ApexProtocol.ReadOpcode.STATUS_V1, valid = { ApexStatusV1.decode(it) != null }) {
@@ -104,7 +109,7 @@ class ApexManager(
      * temporary basal ends or is cancelled, until the next command. A pump that has had no command
      * since a reset answers with zeros: an answer, not a silence, but only while no temporary basal
      * runs. With one running, [tbrRuns], the status says there was a command, and zeros, like a
-     * frame that does not decode, are a broken answer: it is asked for again, see `ApexExchange.ASKS`.
+     * frame that does not decode, are a broken answer: it is asked for again, see `ReadAgainDeep`.
      *
      * @return the answer, or null when no sound one came
      */
@@ -114,7 +119,7 @@ class ApexManager(
             it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.TBR_ACTIVE
         } ?: return null
         if (!sound(frame)) {
-            aapsLogger.warn(LTag.PUMPCOMM, "Apex: the last temporary basal command came unsound every time${if (tbrRuns) ", though one runs" else ""}: ${hex(frame.raw)}")
+            aapsLogger.warn(LTag.PUMPCOMM, "Apex: the last temporary basal command came unsound every time${if (tbrRuns) ", though one runs" else ""}: ${ApexFrame.hex(frame.raw)}")
             return null
         }
         val command = ApexTbrStatus.decode(frame)
@@ -129,7 +134,7 @@ class ApexManager(
      * The object is read when a temporary basal the driver holds open no longer runs: the pump
      * holds its end, unless it was reset since. An empty answer then is a fault far more
      * often than a reset, and the pump builds the object anew for every read: it is asked again in
-     * the same count as a silence, see `ApexExchange.ASKS`, and an answer that stays empty is what
+     * the same count as a silence, see `ReadAgainDeep`, and an answer that stays empty is what
      * the pump holds.
      *
      * @return the answer, or null when none arrived
@@ -148,15 +153,15 @@ class ApexManager(
      * Read the stored basal profiles; true when at least one came. The pump can send fewer than it
      * declares, so the read ends when the pump goes quiet and what arrived is kept.
      */
-    fun readBasalProfiles(selectedIndex: Int?): Boolean {
+    fun readBasalProfiles(): Boolean {
         synchronized(collectedProfiles) { collectedProfiles.clear() }
         val isProfile = { frame: ApexResponseFrame ->
             frame.frameId == ApexProtocol.MODE_HISTORY && frame.objectType == ApexProtocol.ReadOpcode.BASAL_PROFILES
         }
-        // A burst is asked again here, not in the exchange: a silent read counts as one of the asks.
-        val answered = (1..ApexExchange.ASKS).any { ask ->
+        // A burst is asked again here, not in the exchange: a silent read counts as one of the reads, see ReadAgainDeep.
+        val answered = ReadAgainDeep.untilAnswered { ask ->
             exchange.exchange(
-                "read 0x%02X, ask $ask of ${ApexExchange.ASKS}".format(ApexProtocol.ReadOpcode.BASAL_PROFILES),
+                "read 0x%02X, ask $ask of ${ReadAgainDeep.READS}".format(ApexProtocol.ReadOpcode.BASAL_PROFILES),
                 match = {
                     isProfile(it) &&
                         synchronized(collectedProfiles) { collectedProfiles.size >= it.recordCount && it.recordCount > 0 }
@@ -167,21 +172,18 @@ class ApexManager(
             }
         }
         if (!answered) return false
-        return publishProfiles(selectedIndex)
+        return publishProfiles()
     }
 
     /** Hand the profiles that came to [pumpState]; a profile not sent stays an empty slot, so an index keeps its slot. */
-    private fun publishProfiles(selectedIndex: Int?): Boolean {
+    private fun publishProfiles(): Boolean {
         val profiles = synchronized(collectedProfiles) { HashMap(collectedProfiles) }
         if (profiles.isEmpty()) {
             aapsLogger.error(LTag.PUMPCOMM, "Apex: the pump sent no basal profiles")
             return false
         }
         val count = maxOf(profiles.keys.max() + 1, ApexProtocol.PROFILE_COUNT)
-        pumpState.profiles = ApexPumpState.Profiles(
-            Array(count) { index -> profiles[index] ?: DoubleArray(ApexProtocol.BASAL_SLOTS) },
-            selectedIndex
-        )
+        pumpState.profiles = ApexPumpState.Profiles(Array(count) { index -> profiles[index] ?: DoubleArray(ApexProtocol.BASAL_SLOTS) })
         pumpState.lastConnection = dateUtil.now()
         aapsLogger.debug(LTag.PUMPCOMM, "Apex: ${profiles.size} basal profile(s) read of $count slots")
         return true
@@ -217,22 +219,24 @@ class ApexManager(
 
         // Read back, a few times: the stored profile follows the acknowledgement with a delay.
         var lastProblem = "pump did not return the basal profiles"
-        repeat(ApexConst.EFFECT_POLL_ATTEMPTS) {
-            SystemClock.sleep(ApexConst.EFFECT_POLL_INTERVAL_MS)
-            if (!readBasalProfiles(target)) return@repeat
-            val stored = pumpState.profiles?.rates?.getOrNull(target)
-            if (stored == null) {
-                lastProblem = "pump did not return profile $target"
-                return@repeat
+        val awaited = AwaitResult.until(
+            ApexConst.EFFECT_POLL_ATTEMPTS, ApexConst.EFFECT_POLL_INTERVAL_MS, silenceEnds = false,
+            read = {
+                if (!readBasalProfiles()) null
+                else pumpState.profiles?.rates?.getOrNull(target).also { if (it == null) lastProblem = "pump did not return profile $target" }
+            },
+            took = { stored ->
+                val differing = ApexPumpState.differingSlots(rates, stored)
+                if (differing.isNotEmpty()) {
+                    lastProblem = "pump stored different rates: " + differing.joinToString(", ", limit = 5) {
+                        "${ApexPumpState.slotLabel(it)} wanted ${rates[it]} got ${stored[it]}"
+                    }
+                    aapsLogger.debug(LTag.PUMP, "Apex: read back does not match yet, $lastProblem")
+                }
+                differing.isEmpty()
             }
-            val differing = ApexPumpState.differingSlots(rates, stored)
-            if (differing.isEmpty()) return null
-            lastProblem = "pump stored different rates: " + differing.joinToString(", ", limit = 5) {
-                "${ApexPumpState.slotLabel(it)} wanted ${rates[it]} got ${stored[it]}"
-            }
-            aapsLogger.debug(LTag.PUMP, "Apex: read back does not match yet, $lastProblem")
-        }
-        return lastProblem
+        )
+        return if (awaited.took) null else lastProblem
     }
 
     /** Read the recent boluses, as the pump answers. An answer the pump spoilt is the deep look's to refuse. */
@@ -261,6 +265,19 @@ class ApexManager(
         aapsLogger.warn(LTag.PUMPCOMM, "Apex: the whole bolus history brought ${answer.entries.size} records, the pump holds ${answer.recordCount}: taken as not read")
         return null
     }
+
+    /**
+     * Read the pump's last bolus record alone: one frame, the newest record, the same as the first of
+     * [readBolusHistory]. Only on firmware that answers it, see `FirmwareDiagnosis.lastBolusRecord`.
+     * Null when no answer came.
+     */
+    fun readLastBolusRecord(): ApexJournalAnswer<ApexBolusRecord>? =
+        readRecords(
+            "last bolus record", ApexProtocol.HistoryOpcode.BOLUS_HISTORY,
+            ApexProtocol.GROUP_QUERY, ApexProtocol.HistoryOpcode.BOLUS_HISTORY, ApexProtocol.PARAMETER_LAST_RECORD,
+            burstFrameCap = 1,
+            decode = ApexBolusRecord::decode, describe = ::describeBolus
+        )
 
     /** Read the newest days of the daily statistics, today first: insulin by kind, see [ApexDailyRecord]. */
     fun readDailyStats(): ApexJournalAnswer<ApexDailyRecord>? =
@@ -328,19 +345,15 @@ class ApexManager(
             aapsLogger.error(LTag.PUMP, "Apex: no acknowledgement for selecting profile $index")
             return false
         }
-        repeat(ApexConst.EFFECT_POLL_ATTEMPTS) { attempt ->
-            SystemClock.sleep(ApexConst.EFFECT_POLL_INTERVAL_MS)
-            val card = readStatus()
-            if (card?.status?.activeProfileIndex == index) {
-                aapsLogger.debug(LTag.PUMP, "Apex: profile $index active after ${attempt + 1} checks")
-                return true
+        val awaited = AwaitResult.until(
+            ApexConst.EFFECT_POLL_ATTEMPTS, ApexConst.EFFECT_POLL_INTERVAL_MS, silenceEnds = false,
+            read = { readStatus() },
+            took = { card ->
+                (card.status.activeProfileIndex == index).also { if (!it) aapsLogger.debug(LTag.PUMP, "Apex: waiting for profile $index, pump reports ${card.status.activeProfileIndex}") }
             }
-            aapsLogger.debug(
-                LTag.PUMP,
-                "Apex: waiting for profile $index, pump reports ${card?.status?.activeProfileIndex}, check ${attempt + 1}"
-            )
-        }
-        return false
+        )
+        if (awaited.took) aapsLogger.debug(LTag.PUMP, "Apex: profile $index active")
+        return awaited.took
     }
 
     // Clock
@@ -407,14 +420,32 @@ class ApexManager(
         preferences.put(ApexIntNonKey.AlarmDuration, wanted.alarmDuration)
 
         var lastProblem = "the pump did not report its settings back"
-        repeat(ApexConst.EFFECT_POLL_ATTEMPTS) {
-            SystemClock.sleep(ApexConst.EFFECT_POLL_INTERVAL_MS)
-            val stored = readStatus()?.settings ?: return@repeat
-            if (wanted.mirroredFieldsMatch(stored)) return null
-            lastProblem = "the pump stored different settings"
-            aapsLogger.debug(LTag.PUMP, "Apex: settings read back does not match yet, wanted $wanted got $stored")
+        val awaited = AwaitResult.until(
+            ApexConst.EFFECT_POLL_ATTEMPTS, ApexConst.EFFECT_POLL_INTERVAL_MS, silenceEnds = false,
+            read = { readStatus()?.settings },
+            took = { stored ->
+                wanted.mirroredFieldsMatch(stored).also {
+                    if (!it) {
+                        lastProblem = "the pump stored different settings"
+                        aapsLogger.debug(LTag.PUMP, "Apex: settings read back does not match yet, wanted $wanted got $stored")
+                    }
+                }
+            }
+        )
+        return if (awaited.took) null else ApexFailure(lastProblem)
+    }
+
+    /**
+     * Whether the pump answers the read of its last bolus record alone: the bolus journal asked with
+     * [ApexProtocol.PARAMETER_LAST_RECORD]. Nothing is decoded. Its silence is not counted toward giving
+     * up the link, see [answersRead].
+     */
+    fun answersLastBolusRecord(): Boolean {
+        val isRecord = { frame: ApexResponseFrame -> frame.frameId == ApexProtocol.MODE_HISTORY && frame.objectType == ApexProtocol.HistoryOpcode.BOLUS_HISTORY }
+        val frames = exchange.exchangeForBurst("probe of the last bolus record", isRecord, burstFrameCap = 1, silenceDropsLink = false) {
+            exchange.send(ApexProtocol.GROUP_QUERY, ApexProtocol.MODE_HISTORY, ApexProtocol.HistoryOpcode.BOLUS_HISTORY, ApexProtocol.PARAMETER_LAST_RECORD)
         }
-        return ApexFailure(lastProblem)
+        return !frames.isNullOrEmpty()
     }
 
     /** The period the user chose last went to the pump on this link, minutes; null when it did not yet. */
@@ -422,7 +453,7 @@ class ApexManager(
 
     /** The period of the heartbeat the user chose, minutes, one of [ApexConst.HEARTBEAT_PERIODS]. */
     fun heartbeatPeriodMinutes(): Int =
-        preferences.get(ApexIntKey.HeartbeatPeriod).takeIf { it in ApexConst.HEARTBEAT_PERIODS } ?: ApexConst.HEARTBEAT_PERIOD_DEFAULT
+        ApexConst.heartbeatPeriod(preferences.get(ApexIntKey.HeartbeatPeriod))
 
     /** True when the period the user chose did not go to the pump on this link yet: at the link, or after the user changed it. */
     fun heartbeatPeriodDue(): Boolean = heartbeatPeriodSent != heartbeatPeriodMinutes()
@@ -562,5 +593,4 @@ class ApexManager(
         // Kept by readBasalProfiles, which knows when the answer is over.
     }
 
-    private fun hex(bytes: ByteArray): String = bytes.joinToString(" ") { "%02x".format(it) }
 }

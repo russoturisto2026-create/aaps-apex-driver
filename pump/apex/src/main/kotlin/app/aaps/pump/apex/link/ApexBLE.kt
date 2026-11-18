@@ -61,6 +61,14 @@ class ApexBLE(
 
     @Volatile private var callback: ApexBleCallback? = null
 
+    /** Whether the last link setup found the authorisation service (ffc0); null before any. For the screen. */
+    @Volatile var authServiceFound: Boolean? = null
+        private set
+
+    /** Whether the last link setup sent a password; null before any. For the screen. */
+    @Volatile var passwordSent: Boolean? = null
+        private set
+
     /** Held while a link's start or end is told: one at a time, so they arrive in the order they happened. */
     private val reportLock = Any()
 
@@ -112,8 +120,8 @@ class ApexBLE(
     @Volatile private var readySince = 0L
 
     /**
-     * When anything last arrived from the pump: what tells a held link that went quiet from a live one.
-     * Every frame counts, not only the heartbeat.
+     * When anything last arrived from the pump, for the trace of a link's end. Every frame counts, not
+     * only the heartbeat. A held link that went quiet is found by the watch over the heartbeat, see `HeartbeatOverdueDeep`.
      */
     @Volatile private var lastHeardFromAt = 0L
 
@@ -628,6 +636,8 @@ class ApexBLE(
                 link.authWriteCharacteristic = authWrite
             }
             if (!discovered) return
+            authServiceFound = authNotify != null && authWrite != null
+            passwordSent = authServiceFound == true && password != ApexBtPassword.NONE
             if (notify == null || write == null) {
                 aapsLogger.error(
                     LTag.PUMPBTCOMM,

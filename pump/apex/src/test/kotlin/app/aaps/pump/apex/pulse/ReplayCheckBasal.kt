@@ -1,5 +1,6 @@
 package app.aaps.pump.apex.pulse
 
+import app.aaps.pump.apex.account.time.ApexClock
 import app.aaps.pump.apex.protocol.ApexProtocol
 import java.util.Locale
 import kotlin.math.abs
@@ -34,7 +35,8 @@ object ReplayCheckBasal {
         val closed = states.filter { it.second.fields["state"] == "closed" }
         val sums = HashMap<Long, Double>()
         for ((i, t) in closed) {
-            val s = run.results.indexOfFirst { it.beat.heartbeatMs == t.fields["from"] }
+            // A period begins at the start of its heartbeat's minute, see BasalPeriodKeeper.
+            val s = run.results.indexOfFirst { ApexClock.minuteStart(it.beat.heartbeatMs) == t.fields["from"] }
             val units = (t.fields["units"] as Number).toDouble()
             val moved = Math.round((count(run, i)!! - count(run, s)!!) / STEP)
             val taken = Math.round((run.results[i].periodBolusesBefore + run.bolusRows.filter { it.beat == i }.sumOf { it.write.amountUnits }) / STEP)

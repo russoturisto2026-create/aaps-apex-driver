@@ -3,7 +3,6 @@ package app.aaps.pump.apex.deep
 import app.aaps.pump.apex.account.bolus.BolusRecordFrames.record
 import app.aaps.pump.apex.account.journal.JournalSnapshot
 import app.aaps.pump.apex.account.store.FakeStore
-import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.protocol.ApexBolusRecord
 import app.aaps.pump.apex.protocol.ApexJournalAnswer
 import app.aaps.pump.apex.protocol.ApexRead
@@ -18,7 +17,7 @@ class JournalRestartDeepTest {
 
     private val store = FakeStore()
     private val serial = "12345678"
-    private val journal = JournalSnapshot(store, serial, SnapshotKind.BOLUS)
+    private val journal = JournalSnapshot(store, serial)
     private val offsetMs = 0L
     private val tenOClock = 1_760_000_000L / 60 * 60
     private val nowMs = tenOClock * 1000L + 90_000L
@@ -52,12 +51,15 @@ class JournalRestartDeepTest {
     }
 
     @Test
-    fun `the boluses last held longer ago than the insulin acts - it acts no more`() {
+    fun `the boluses last held longer ago than the insulin acts and five hours - it acts no more`() {
         val hour = 3_600_000L
         assertFalse(JournalRestartDeep.actsNoMore(nowMs - 5 * hour, nowMs, null))
         assertTrue(JournalRestartDeep.actsNoMore(nowMs - 5 * hour - 1, nowMs, null))
         assertFalse(JournalRestartDeep.actsNoMore(nowMs - 6 * hour, nowMs, 7 * hour))
-        assertTrue(JournalRestartDeep.actsNoMore(nowMs - 4 * hour, nowMs, 3 * hour))
+        assertTrue(JournalRestartDeep.actsNoMore(nowMs - 7 * hour - 1, nowMs, 7 * hour))
+        // An insulin that acts less than five hours: five hours stand.
+        assertFalse(JournalRestartDeep.actsNoMore(nowMs - 4 * hour, nowMs, 3 * hour))
+        assertTrue(JournalRestartDeep.actsNoMore(nowMs - 5 * hour - 1, nowMs, 3 * hour))
         // An insulin with no length is no insulin to tell: five hours stand.
         assertFalse(JournalRestartDeep.actsNoMore(nowMs - 4 * hour, nowMs, 0L))
         assertFalse(JournalRestartDeep.actsNoMore(nowMs - 4 * hour, nowMs, -1L))

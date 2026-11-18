@@ -10,6 +10,8 @@ import app.aaps.pump.apex.trace.ApexTraceCat
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
+import app.aaps.pump.apex.ApexConst
+import app.aaps.pump.apex.link.ApexBLE
 
 /**
  * Finds out at every link setup which optional objects a pump has, see [ApexAbilities], so that
@@ -20,6 +22,10 @@ import dev.zacsweers.metro.SingleIn
  * again and Status V1 answers again, the object is missing on this pump. So an object is stored as
  * missing only after two rounds of silence with Status V1 answering after each.
  * The silence of a probe is not counted toward giving up the link, see `ApexExchange`.
+ *
+ * Then, for the user only, what else the firmware has, see [FirmwareDiagnosis]: the temporary basal
+ * history and the last bolus record alone are asked the same way, and the password is told by the link
+ * setup and the protocol. The account does not use these.
  */
 @SingleIn(AppScope::class)
 @Inject
@@ -28,6 +34,7 @@ class AbilityProbe(
     private val manager: ApexManager,
     private val store: ApexStore,
     private val pumpState: ApexPumpState,
+    private val apexBLE: ApexBLE,
     private val trace: ApexTrace
 ) {
 
@@ -40,10 +47,28 @@ class AbilityProbe(
         val finishedTbr = has("last finished temporary basal") { manager.answersRead(ApexProtocol.ReadOpcode.TBR_FINISHED) } ?: return
         val dayRecord = has("daily statistics") { manager.answersLatestRecords(ApexProtocol.HistoryOpcode.LATEST_DAILY_STATS) } ?: return
         val statusV2 = has("Status V2") { manager.answersRead(ApexProtocol.ReadOpcode.STATUS_V2) } ?: return
-        val abilities = ApexAbilities(lastTbrCommand, finishedTbr, dayRecord, statusV2)
+        keep(serial, firmware, ApexAbilities(lastTbrCommand, finishedTbr, dayRecord, statusV2))
+        val tbrHistory = has("temporary basal history") { manager.answersLatestRecords(ApexProtocol.HistoryOpcode.TBR_HISTORY) }
+        val lastBolusRecord = has("last bolus record") { manager.answersLastBolusRecord() }
+        pumpState.diagnosis = FirmwareDiagnosis(
+            probedAtMs = System.currentTimeMillis(),
+            statusV2 = statusV2, lastTbrCommand = lastTbrCommand, finishedTbr = finishedTbr, dayRecord = dayRecord,
+            tbrHistory = tbrHistory, lastBolusRecord = lastBolusRecord,
+            passwordService = apexBLE.authServiceFound,
+            passwordProtocol = pumpState.version?.protocolAtLeast(ApexConst.PASSWORD_PROTOCOL_MAJOR, ApexConst.PASSWORD_PROTOCOL_MINOR),
+            passwordSent = apexBLE.passwordSent
+        )
+        aapsLogger.info(LTag.PUMP, "Apex: the firmware also has: temporary basal history $tbrHistory, last bolus record $lastBolusRecord; password service ${apexBLE.authServiceFound}")
+    }
+
+    /** The abilities the account goes by, [abilities], stored for this pump and firmware. */
+    private fun keep(serial: String, firmware: String, abilities: ApexAbilities) {
         ApexAbilities.store(aapsLogger, store, serial, firmware, abilities)
         aapsLogger.info(LTag.PUMP, "Apex: the pump has: ${abilities.text}")
-        trace.event(ApexTraceCat.STATE, "abilities", "lastTbrCommand" to lastTbrCommand, "finishedTbr" to finishedTbr, "dayRecord" to dayRecord, "statusV2" to statusV2)
+        trace.event(
+            ApexTraceCat.STATE, "abilities",
+            "lastTbrCommand" to abilities.lastTbrCommand, "finishedTbr" to abilities.finishedTbr, "dayRecord" to abilities.dayRecord, "statusV2" to abilities.statusV2
+        )
     }
 
     /**

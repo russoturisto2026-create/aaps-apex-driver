@@ -13,9 +13,9 @@ import kotlin.math.abs
 /**
  * Whether the bolus journal has to be read at this heartbeat. The daily statistics say what the
  * pump delivered today by kind, and a bolus that went in since the last heartbeat moves the bolus
- * field. Our own boluses move it too, and their records are settled by the command that gave them,
- * which keeps the day it read after them; a bolus the command could not settle is kept by the
- * account until the next day is kept. So the journal is read when the bolus
+ * field. Our own boluses move it too, and their records are settled by the reconciliation that runs
+ * when our bolus ends; a bolus settled when no day could be kept is kept by the account until the
+ * next day is kept. So the journal is read when the bolus
  * field moved by more than our boluses together, a bolus somebody else gave, or by less, which
  * the statistics should not do; and left alone when it moved by our boluses alone, or not at all.
  * The basal and temporary basal fields are only reported, for the log.
@@ -49,7 +49,7 @@ class BolusGate(private val store: ApexStore, private val serial: String) {
         val today = days.answer.entries.firstOrNull()?.record ?: return Decision(true, "the statistics came with no day")
         val gap = today.totalUnits - counterUnits
         val kept = keptDay() ?: return Decision(true, "no day kept yet", sumGapUnits = gap)
-        if (abs(gap) > ApexProtocol.DOSE_SCALE + ROUNDING) return Decision(true, "the day's fields do not add up to the count", sumGapUnits = gap)
+        if (abs(gap) > ApexProtocol.DOSE_SCALE + ApexProtocol.ROUNDING) return Decision(true, "the day's fields do not add up to the count", sumGapUnits = gap)
         if (today.dayClockSeconds != kept.dayClockSeconds) return Decision(true, "a new day on the pump", sumGapUnits = gap)
         if (!ApexDailyRecord.holdsKept(today, kept)) return Decision(true, "today went back below the day kept: the pump lost its power and started the day over", sumGapUnits = gap)
         val bolus = today.bolusUnits - kept.bolusUnits
@@ -60,9 +60,9 @@ class BolusGate(private val store: ApexStore, private val serial: String) {
         val rest = bolus - ours.sum()
         fun verdict(read: Boolean, reason: String) = Decision(read, reason, bolus, basal, tbr, gap, ours)
         return when {
-            ours.isEmpty() && abs(rest) > ROUNDING -> verdict(true, "the bolus field moved")
-            rest > ROUNDING                        -> verdict(true, "the bolus field moved by more than our boluses")
-            rest < -ROUNDING                       -> verdict(true, "the bolus field moved by less than our boluses")
+            ours.isEmpty() && abs(rest) > ApexProtocol.ROUNDING -> verdict(true, "the bolus field moved")
+            rest > ApexProtocol.ROUNDING                        -> verdict(true, "the bolus field moved by more than our boluses")
+            rest < -ApexProtocol.ROUNDING                       -> verdict(true, "the bolus field moved by less than our boluses")
             account.openActions().any()            -> verdict(true, "an order of ours waits for its record")
             ours.isNotEmpty()                      -> verdict(false, "the bolus field moved by our boluses alone")
             else                                   -> verdict(false, "no bolus since the last heartbeat")
@@ -70,8 +70,8 @@ class BolusGate(private val store: ApexStore, private val serial: String) {
     }
 
     /**
-     * Keep today's record of [days] as the day the next span is counted from: read after a
-     * heartbeat, or after our bolus. It counts every bolus settled so far, so the account's list of
+     * Keep today's record of [days] as the day the next span is counted from: the status
+     * kept by a reconciliation that succeeded, see `Reconciliation`. It counts every bolus settled so far, so the account's list of
      * them starts over. Not while an order of ours is not settled: it is counted from the day kept
      * already, and would be lost if the field that holds it became the new start.
      */
@@ -109,8 +109,5 @@ class BolusGate(private val store: ApexStore, private val serial: String) {
         store.snapshot(serial, SnapshotKind.DAILY)?.frames?.firstOrNull()?.let { ApexDailyRecord.decode(ApexResponseFrame(it)) }
 
     private companion object {
-
-        /** Slack for sums of doses held as doubles. */
-        const val ROUNDING = 1e-6
     }
 }

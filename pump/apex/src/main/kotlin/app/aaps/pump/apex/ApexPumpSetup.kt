@@ -40,7 +40,7 @@ class ApexPumpSetup(
 
     fun setupForAaps(): PumpEnactResult {
         if (!connection.isConnected) return failed(rh.gs(R.string.apex_not_connected))
-        if (pumpState.suspended || pumpState.activeAlarmCodes.isNotEmpty() || pumpState.locked) return failed(rh.gs(R.string.apex_pump_not_taking_commands))
+        if (pumpState.takesNoCommands) return failed(rh.gs(R.string.apex_pump_not_taking_commands))
         val current = manager.readStatus()?.settings ?: return failed(rh.gs(R.string.apex_not_connected))
         val wanted = current.copy(
             extendedBolusAllowed = false,
@@ -70,7 +70,7 @@ class ApexPumpSetup(
      */
     fun changeBtPassword(): PumpEnactResult {
         if (!connection.isConnected) return failed(rh.gs(R.string.apex_not_connected))
-        if (pumpState.suspended || pumpState.activeAlarmCodes.isNotEmpty() || pumpState.locked) return failed(rh.gs(R.string.apex_pump_not_taking_commands))
+        if (pumpState.takesNoCommands) return failed(rh.gs(R.string.apex_pump_not_taking_commands))
         if (!pumpState.canChangePassword) {
             return failed(rh.gs(R.string.apex_password_unsupported))
         }

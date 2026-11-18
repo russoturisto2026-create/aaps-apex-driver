@@ -6,6 +6,7 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.keys.LongNonKey
 import app.aaps.core.keys.interfaces.Preferences
+import app.aaps.pump.apex.ApexConst
 import app.aaps.pump.apex.ApexLimits
 import app.aaps.pump.apex.ApexPumpClock
 import app.aaps.pump.apex.account.AapsCarrier
@@ -18,7 +19,9 @@ import app.aaps.pump.apex.account.bolus.BolusJournal
 import app.aaps.pump.apex.account.store.ClockOffset
 import app.aaps.pump.apex.account.store.FakeStore
 import app.aaps.pump.apex.account.tbr.TbrJournal
+import app.aaps.pump.apex.command.ApexBolusDelivery
 import app.aaps.pump.apex.command.TbrCommand
+import app.aaps.pump.apex.deep.RunningBolusDeep
 import app.aaps.pump.apex.keys.ApexStringKey
 import app.aaps.pump.apex.manager.ApexManager
 import app.aaps.pump.apex.protocol.ApexBolusRecord
@@ -126,20 +129,26 @@ class ReplayRig(
         doAnswer { statusV2Of() }.whenever(manager).readStatusV2()
         doAnswer { lastCommandOf(it.getArgument(0)) }.whenever(manager).readLastTbrCommand(any())
         doAnswer { finishedOf() }.whenever(manager).readFinishedTbr()
+        // The manager gives the period the user chose, one of 2, 3 or 5 minutes; a bare mock gives 0, and the grid divides by it.
+        whenever(manager.heartbeatPeriodMinutes()).thenReturn(ApexConst.HEARTBEAT_PERIOD_DEFAULT)
 
-        val aapsToday: AapsToday = mock()
-        // The bolus journal gets its own: the basal it is told is the replay's rows, while the other readers of the rows keep seeing none.
-        val bolusToday: AapsToday = mock()
-        runBlocking { whenever(bolusToday.basalBetween(any(), any())).thenAnswer { ordered.between(it.getArgument(0), it.getArgument(1)) } }
+        // The bolus journal and the basal period are told the basal the replay's rows and the status rates order.
+        val orderedToday: AapsToday = mock()
+        runBlocking { whenever(orderedToday.basalBetween(any(), any())).thenAnswer { ordered.between(it.getArgument(0), it.getArgument(1)) } }
         val reader = PictureReader(log, manager, store, pumpState, TbrFactsReader(log, manager, store, pumpState), trace)
-        val keeper = BasalPeriodKeeper(log, preferences, store, pumpSync, persistence, mock<ProfileFunction>(), aapsToday, trace)
+        // The record has one status per heartbeat: the reads of the check whether a bolus runs get it again, with no pause.
+        val runningBolus = RunningBolusDeep(log, manager, mock<ApexBolusDelivery>(), trace).apply { pause = {} }
+        val keeper = BasalPeriodKeeper(log, preferences, store, pumpSync, persistence, mock<ProfileFunction>(), orderedToday, carrier, trace)
         val pumpClock: ApexPumpClock = mock {
             on { phoneOffsetMs() } doReturn 0L
         }
+        val reconciliation = Reconciliation(
+            log, store, reader, BolusJournal(log, store, manager, reader, carrier, orderedToday, preferences, pumpState, trace), TbrJournal(log, store, carrier, trace),
+            keeper, runningBolus, trace
+        )
         tick = HeartbeatTick(
-            log, mock<RxBus>(), reader, HeartbeatGrid(log, manager, trace), manager, store, pumpState, pumpClock,
-            BolusJournal(log, store, manager, reader, carrier, bolusToday, preferences, trace), TbrJournal(log, store, carrier, trace),
-            keeper, mock<TbrCommand>(), mock<ApexLimits>(), trace
+            log, mock<RxBus>(), reader, HeartbeatGrid(log, manager, trace), manager, store, pumpState, pumpClock, reconciliation,
+            mock<TbrCommand>(), mock<ApexLimits>(), trace
         )
     }
 

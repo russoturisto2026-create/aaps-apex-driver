@@ -1,5 +1,6 @@
 package app.aaps.pump.apex.account.basal
 
+import app.aaps.pump.apex.deep.BasalPeriodDeep
 import app.aaps.pump.apex.protocol.ApexDailyRecord
 import app.aaps.pump.apex.protocol.ApexProtocol
 
@@ -9,28 +10,22 @@ import app.aaps.pump.apex.protocol.ApexProtocol
  * day record: its basal and temporary basal fields together are the basal that went in. So:
  *
  * - inside the period AAPS holds the rows as they were ordered;
- * - the period is closed at a heartbeat, by the day record read at it, see [isDue] for which
- *   heartbeat; the basal of the period is the move of the two fields since the heartbeat it began
- *   at, in whole steps of the pump;
- * - boluses first: when the bolus journal was read at the heartbeat, it is settled before the
- *   period is closed, so that a bolus row and the basal row of the same span come from the same
- *   picture. The fields themselves do not depend on the bolus: a heartbeat that comes while our
- *   bolus runs closes the period like any other;
+ * - a period begins and ends only at a heartbeat whose reconciliation succeeded, see `Reconciliation`:
+ *   no bolus ran, and the new records explain how the pump's numbers moved. The basal of the period
+ *   is the move of the two fields since the heartbeat it began at, in whole steps of the pump;
+ * - boluses first: the bolus journal is settled before the period is closed, so that a bolus row and
+ *   the basal row of the same span come from the same picture;
  * - across the pump's midnight the day the period began in is found again below the new one, and
  *   each day after it counts whole, as the bolus gate does it;
- * - a day the period began in that is not in the answer any more, or went back below what it
- *   held, is a day the pump began over: there is no count to close from, the period begins anew
- *   and its rows stay as ordered.
+ * - when the pump's numbers cannot be held against the mark, the period waits or begins anew, see
+ *   [BasalPeriodDeep].
  *
  * A pump without the daily statistics tells only the count of all the insulin of its day. The
  * basal of the period is then the move of that count, less the boluses with a row in AAPS in the
  * period, in whole steps. That is the basal the pump delivered: it is never below zero, and
- * nothing of one period is taken off another. Boluses above the move of the count cannot be: the
- * bolus rows are wrong then, the period gets no basal and the error is logged. There is no count
- * to close from when the pump's
- * day changed (the count started over) or the count went back. A heartbeat that comes while our
- * bolus runs neither closes nor begins such a period: the count holds a part of the bolus and its
- * row is not written yet.
+ * nothing of one period is taken off another. The pump's count starts over at its midnight: the
+ * period then begins anew with the new day. A count that does not move as usual,
+ * or bolus rows above it: see [BasalPeriodDeep].
  *
  * Arithmetic only; the keeper holds the period in the store and writes the rows.
  */
@@ -101,56 +96,37 @@ object BasalPeriod {
 
     /**
      * @param now what the pump had delivered by this heartbeat
-     * @param settled false when the bolus journal of this heartbeat was read and not settled
-     * @param duringBolus true when this heartbeat came while our bolus runs: the count then holds a part
-     * of the bolus and its row is not written yet, so a period counted from the count is not closed at it
      * @param bolusUnits the boluses to take off the move of the count: the rows written since the
      * period began, see [PeriodBoluses]; used only when the period is counted from the count
      */
-    fun step(start: Mark, mode: ExactBasalMode, atMs: Long, now: Delivered, settled: Boolean, duringBolus: Boolean = false, bolusUnits: Double = 0.0): Step {
-        if (!isDue(mode, start.atMs, atMs)) return Step.Wait
-        if (!settled) return Step.Postpone("boluses")
+    fun step(start: Mark, atMs: Long, now: Delivered, bolusUnits: Double = 0.0): Step {
+        if (!isDue(start.atMs, atMs)) return Step.Wait
         return when (now) {
             is Delivered.DayRecord -> byDayRecord(start, now)
-            is Delivered.Count     -> if (duringBolus) Step.Postpone("bolus_runs") else byCount(start, now, bolusUnits)
+            is Delivered.Count     -> byCount(start, now, bolusUnits)
         }
     }
 
     private fun byDayRecord(start: Mark, now: Delivered.DayRecord): Step {
-        val from = start.day ?: return Step.Restart("count_kind_changed")
-        if (now.broken) return Step.Postpone("days_broken")
+        BasalPeriodDeep.cannotCloseByDays(start, now)?.let { return it }
+        val from = requireNotNull(start.day) { "a mark of the day record kind holds a day" }
         val days = now.days
-        val at = ApexDailyRecord.indexOfKept(days, from) ?: return Step.Restart("kept_day_gone")
+        val at = requireNotNull(ApexDailyRecord.indexOfKept(days, from)) { "the day kept is in the answer" }
         val moved = days.take(at).sumOf { it.basalUnits + it.tbrUnits } + (days[at].basalUnits + days[at].tbrUnits) - (from.basalUnits + from.tbrUnits)
         return Step.Close(Math.round(moved / ApexProtocol.DOSE_SCALE) * ApexProtocol.DOSE_SCALE)
     }
 
     private fun byCount(start: Mark, now: Delivered.Count, bolusUnits: Double): Step {
-        val from = start.delivered as? Delivered.Count ?: return Step.Restart("day_record_kind_changed")
+        BasalPeriodDeep.countKindLost(start)?.let { return it }
+        val from = start.delivered as Delivered.Count
+        // The pump's count starts over at its midnight: a new period begins with the new day.
         if (now.pumpDay != from.pumpDay) return Step.Restart("pump_day_changed")
-        if (now.units < from.units - ApexProtocol.DOSE_SCALE / 2) return Step.Restart("count_went_back")
+        BasalPeriodDeep.countWentBack(from, now)?.let { return it }
         val moved = Math.round((now.units - from.units) / ApexProtocol.DOSE_SCALE).coerceAtLeast(0L)
         val boluses = Math.round(bolusUnits / ApexProtocol.DOSE_SCALE)
         return Step.Close(maxOf(0L, moved - boluses) * ApexProtocol.DOSE_SCALE, maxOf(0L, boluses - moved) * ApexProtocol.DOSE_SCALE)
     }
 
-    /**
-     * Why a period cannot begin at this heartbeat, or null when it can. A period of the count kind
-     * takes the boluses written during it off the move of the pump's count. So it begins only at a
-     * count that holds no bolus still to be written: not while our bolus runs, and not while the
-     * bolus journal of this heartbeat is not settled. Else a bolus given before the period would be
-     * taken off the basal of the periods after it.
-     */
-    fun cannotBegin(now: Delivered, settled: Boolean, duringBolus: Boolean): String? = when {
-        now !is Delivered.Count -> null
-        duringBolus             -> "bolus_runs"
-        !settled                -> "journal_unsettled"
-        else                    -> null
-    }
-
-    /** True when the heartbeat at [atMs] ends the period begun at [startMs]: in the exact mode, the next heartbeat. */
-    fun isDue(mode: ExactBasalMode, startMs: Long, atMs: Long): Boolean = when (mode) {
-        ExactBasalMode.OFF       -> false
-        ExactBasalMode.HEARTBEAT -> atMs > startMs
-    }
+    /** True when the heartbeat at [atMs] ends the period begun at [startMs]: the next heartbeat. */
+    fun isDue(startMs: Long, atMs: Long): Boolean = atMs > startMs
 }

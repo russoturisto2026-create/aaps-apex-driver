@@ -3,7 +3,6 @@ package app.aaps.pump.apex.account.bolus
 import app.aaps.pump.apex.account.AapsWrite
 import app.aaps.pump.apex.account.bolus.BolusRecordFrames.record
 import app.aaps.pump.apex.account.journal.JournalSnapshot
-import app.aaps.pump.apex.account.store.ActionKind
 import app.aaps.pump.apex.account.store.FakeStore
 import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.protocol.ApexProtocol
@@ -18,7 +17,7 @@ class BolusAccountTest {
 
     private val store = FakeStore()
     private val serial = "12345678"
-    private val journal = JournalSnapshot(store, serial, SnapshotKind.BOLUS)
+    private val journal = JournalSnapshot(store, serial)
     private val account = BolusAccount(store, serial)
 
     /** The pump's clock stands at UTC in these tests: a key is the moment in seconds. */
@@ -122,7 +121,7 @@ class BolusAccountTest {
         pastOf(5)
         // The pump took 0.65 U and gave nothing; our 0.2 U came later and has its record.
         val silent = account.commandAccepted(tenOClock * 1000L - 6 * 60_000L, 0.65, "SMB")
-        account.finished(silent, 0.0, completed = false)
+        account.finished(silent, 0.0)
         account.commandAccepted(tenOClock * 1000L + 17_000L, 0.2, "SMB")
         val added = answerWith(record(tenOClock, 8, 8))
 
@@ -150,11 +149,9 @@ class BolusAccountTest {
     fun `the command notes where the journal stood, and the end of the bolus what the pump reported`() {
         pastOf(3)
         val action = account.commandAccepted(tenOClock * 1000L, 1.0, "NORMAL")
-        assertEquals(ActionKind.BOLUS, action.kind)
         assertEquals(3L, action.journalTopSeq)
-        account.finished(action, 0.975, completed = true)
+        account.finished(action, 0.975)
         val kept = store.actions(serial).single()
-        assertTrue(kept.finished)
         assertEquals(0.975, kept.seenUnits!!, 1e-9)
     }
 }

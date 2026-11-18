@@ -16,6 +16,7 @@ import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
+import app.aaps.pump.apex.link.ApexBLE
 
 /**
  * An object is stored as missing only after two rounds of silence with Status V1 answering after
@@ -31,7 +32,7 @@ class AbilityProbeTest {
         serialNumber = serial
         version = ApexVersion.decode(ApexResponseParser().feed(hexToBytes("AA 10 00 A3 31 00 00 00 00 01 01 01 04 0C 0C 7E"))[0])
     }
-    private val probe = AbilityProbe(AAPSLoggerTest(), manager, store, state, mock(ApexTrace::class.java))
+    private val probe = AbilityProbe(AAPSLoggerTest(), manager, store, state, mock(ApexBLE::class.java), mock(ApexTrace::class.java))
     private val lastCommand = ApexProtocol.ReadOpcode.TBR_ACTIVE
     private val statusV2 = ApexProtocol.ReadOpcode.STATUS_V2
 
@@ -41,6 +42,8 @@ class AbilityProbeTest {
         doReturn(true).`when`(manager).answersRead(ApexProtocol.ReadOpcode.TBR_FINISHED)
         doReturn(true).`when`(manager).answersRead(statusV2)
         doReturn(true).`when`(manager).answersLatestRecords(ApexProtocol.HistoryOpcode.LATEST_DAILY_STATS)
+        doReturn(true).`when`(manager).answersLatestRecords(ApexProtocol.HistoryOpcode.TBR_HISTORY)
+        doReturn(true).`when`(manager).answersLastBolusRecord()
     }
 
     private fun statusAnswers() = doReturn(mock(ApexPumpState.StatusCard::class.java)).`when`(manager).readStatus()
@@ -90,6 +93,19 @@ class AbilityProbeTest {
         probe.probe()
         assertNull(ApexAbilities.stored(store, serial, firmware))
         verify(manager, times(2)).readStatus()
+    }
+
+    @Test
+    fun `the screen gets what the firmware has, the objects the account does not use among them`() {
+        allAnswer()
+        doReturn(false).`when`(manager).answersLatestRecords(ApexProtocol.HistoryOpcode.TBR_HISTORY)
+        statusAnswers()
+        probe.probe()
+        val found = state.diagnosis!!
+        assertEquals(true, found.lastBolusRecord)
+        assertEquals(false, found.tbrHistory)
+        assertEquals(true, found.dayRecord)
+        assertEquals(true, found.passwordProtocol)
     }
 
     @Test

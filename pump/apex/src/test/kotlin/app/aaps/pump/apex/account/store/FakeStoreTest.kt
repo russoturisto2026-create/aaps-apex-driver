@@ -24,7 +24,7 @@ class FakeStoreTest {
                 store.putState(serial, "a", "2")
                 store.putState(serial, "b", "1")
                 store.saveSnapshot(serial, SnapshotKind.STATUS, Snapshot(listOf(byteArrayOf(2)), 2L))
-                store.addAction(serial, Action(kind = ActionKind.BOLUS, acceptedAtMs = 1L, amount = 1.0, type = "NORMAL", journalTopSeq = 0L))
+                store.addAction(serial, Action(acceptedAtMs = 1L, amount = 1.0, type = "NORMAL", journalTopSeq = 0L))
                 throw IllegalStateException("the pump stopped answering")
             }
         }
@@ -37,7 +37,7 @@ class FakeStoreTest {
     @Test
     fun `a pump forgotten has nothing kept, another pump keeps its own`() {
         store.saveSnapshot(serial, SnapshotKind.BOLUS, Snapshot(listOf(byteArrayOf(1)), 1L))
-        store.addAction(serial, Action(kind = ActionKind.BOLUS, acceptedAtMs = 1L, amount = 0.5, type = "NORMAL", journalTopSeq = 3L))
+        store.addAction(serial, Action(acceptedAtMs = 1L, amount = 0.5, type = "NORMAL", journalTopSeq = 3L))
         store.putState(serial, "recordsSeen.BOLUS", "3")
         store.saveClock(serial, ClockOffset(0L, 1L, "test"), 3L)
         store.putState("87654321", "recordsSeen.BOLUS", "9")

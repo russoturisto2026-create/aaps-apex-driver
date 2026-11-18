@@ -35,9 +35,6 @@ abstract class ApexDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract fun putAction(action: ActionEntity): Long
 
-    @Query("DELETE FROM action WHERE serial = :serial AND kind = :kind")
-    abstract fun dropActions(serial: String, kind: String)
-
     // Clock
 
     @Query("SELECT * FROM clock WHERE serial = :serial")

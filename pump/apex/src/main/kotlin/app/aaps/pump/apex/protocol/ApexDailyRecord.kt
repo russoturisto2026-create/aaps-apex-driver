@@ -76,9 +76,7 @@ data class ApexDailyRecord(
 
         /** [day] holds at least what [kept] held in every field: the same day counted on. */
         fun holdsKept(day: ApexDailyRecord, kept: ApexDailyRecord): Boolean =
-            day.bolusUnits >= kept.bolusUnits - ROUNDING && day.basalUnits >= kept.basalUnits - ROUNDING && day.tbrUnits >= kept.tbrUnits - ROUNDING
+            day.bolusUnits >= kept.bolusUnits - ApexProtocol.ROUNDING && day.basalUnits >= kept.basalUnits - ApexProtocol.ROUNDING && day.tbrUnits >= kept.tbrUnits - ApexProtocol.ROUNDING
 
-        /** Slack for sums of doses held as doubles. */
-        private const val ROUNDING = 1e-6
     }
 }

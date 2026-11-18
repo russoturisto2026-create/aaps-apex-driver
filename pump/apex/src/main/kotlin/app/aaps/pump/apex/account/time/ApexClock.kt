@@ -2,7 +2,6 @@ package app.aaps.pump.apex.account.time
 
 import app.aaps.pump.apex.account.store.ApexStore
 import app.aaps.pump.apex.account.store.ClockOffset
-import app.aaps.pump.apex.account.store.SnapshotKind
 import java.util.TimeZone
 
 /**
@@ -40,14 +39,11 @@ object ApexClock {
     }
 
     /**
-     * The moment of the stamp of record number [seq] of [kind]. A bolus record is stamped when the
-     * pump writes it, so its number says which clock writes it precedes. A temporary basal record is
-     * written when the temporary basal ends but stamped with its start, so its stamp is placed by
-     * the span of the clock log it falls in.
+     * The moment of the stamp of bolus record number [seq]. A bolus record is stamped when the pump
+     * writes it, so its number says which clock writes it precedes.
      */
-    fun momentOfRecord(store: ApexStore, serial: String, kind: SnapshotKind, seq: Long, clockSeconds: Long, currentOffsetMs: Long, nowMs: Long): Long =
-        if (kind == SnapshotKind.BOLUS) momentOf(clockSeconds, offsetOfBolusRecord(store, serial, seq, currentOffsetMs))
-        else momentOfStamp(store, serial, clockSeconds, currentOffsetMs, nowMs)
+    fun momentOfRecord(store: ApexStore, serial: String, seq: Long, clockSeconds: Long, currentOffsetMs: Long): Long =
+        momentOf(clockSeconds, offsetOfBolusRecord(store, serial, seq, currentOffsetMs))
 
     /**
      * The offset bolus record number [seq] was stamped in: the one before the first clock write that
@@ -84,6 +80,8 @@ object ApexClock {
     }
 
     const val MINUTE_MS = 60_000L
+    const val MINUTE_SECONDS = 60L
+    const val DAY_SECONDS = 86_400L
     const val HOUR_MS = 60 * MINUTE_MS
     const val DAY_MS = 24 * HOUR_MS
 

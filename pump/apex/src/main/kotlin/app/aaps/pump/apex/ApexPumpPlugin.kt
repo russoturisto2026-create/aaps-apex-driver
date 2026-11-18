@@ -43,6 +43,8 @@ import app.aaps.pump.apex.command.ApexSetupForAaps
 import app.aaps.pump.apex.command.BolusCommand
 import app.aaps.pump.apex.command.TbrCommand
 import app.aaps.pump.apex.compose.ApexComposeContent
+import app.aaps.pump.apex.deep.ApexHeartbeatOverdue
+import app.aaps.pump.apex.deep.HeartbeatOverdueDeep
 import app.aaps.pump.apex.keys.ApexBooleanKey
 import app.aaps.pump.apex.keys.ApexIntKey
 import app.aaps.pump.apex.keys.ApexIntNonKey
@@ -50,11 +52,8 @@ import app.aaps.pump.apex.keys.ApexStringKey
 import app.aaps.pump.apex.link.ApexConnection
 import app.aaps.pump.apex.manager.ApexManager
 import app.aaps.pump.apex.pulse.ApexHeartbeatTick
-import app.aaps.pump.apex.pulse.ApexHeartbeatOverdue
 import app.aaps.pump.apex.pulse.ApexLinkSetup
-import app.aaps.pump.apex.pulse.StartPosition
 import app.aaps.pump.apex.pulse.HeartbeatTick
-import app.aaps.pump.apex.pulse.HeartbeatWatch
 import app.aaps.pump.apex.state.AbilityProbe
 import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.store.ApexDatabase
@@ -101,11 +100,10 @@ class ApexPumpPlugin(
     private val pumpState: ApexPumpState,
     private val manager: ApexManager,
     private val abilityProbe: AbilityProbe,
-    private val startPosition: StartPosition,
     private val connection: ApexConnection,
     private val database: ApexDatabase,
     private val heartbeatTick: HeartbeatTick,
-    private val heartbeatWatch: HeartbeatWatch,
+    private val heartbeatOverdue: HeartbeatOverdueDeep,
     private val bolusCommand: BolusCommand,
     private val bolusDelivery: ApexBolusDelivery,
     private val tbrCommand: TbrCommand,
@@ -139,7 +137,7 @@ class ApexPumpPlugin(
     /** The watch on the link going up, for as long as the plugin runs. */
     private var linkWatch: Job? = null
 
-    /** The watch over the pump's heartbeat, for as long as the plugin runs, see [HeartbeatWatch]. */
+    /** The watch over the pump's heartbeat, for as long as the plugin runs, see [HeartbeatOverdueDeep]. */
     private var beatWatch: Job? = null
 
     override suspend fun onStart() {
@@ -151,12 +149,12 @@ class ApexPumpPlugin(
         linkWatch = rxBus.toFlow(EventPumpStatusChanged::class)
             .filter { it.status == EventPumpStatusChanged.Status.CONNECTED }
             .collectResilient(pluginScope, aapsLogger, LTag.PUMP) { commandQueue.customCommand(ApexLinkSetup()) }
-        heartbeatWatch.start(System.currentTimeMillis())
+        heartbeatOverdue.start(System.currentTimeMillis())
         beatWatch = pluginScope.launch {
             while (isActive) {
-                delay(HeartbeatWatch.CHECK_MS)
+                delay(HeartbeatOverdueDeep.CHECK_MS)
                 // The asking is launched: the read itself runs in its turn on the queue.
-                if (heartbeatWatch.check(System.currentTimeMillis())) launch { commandQueue.customCommand(ApexHeartbeatOverdue()) }
+                if (heartbeatOverdue.check(System.currentTimeMillis())) launch { commandQueue.customCommand(ApexHeartbeatOverdue()) }
             }
         }
     }
@@ -172,8 +170,8 @@ class ApexPumpPlugin(
 
     /**
      * The heartbeat came: the reconciliation is queued, so that it runs in its turn among the
-     * commands. While our bolus runs, the bolus command answers the heartbeat itself, between the
-     * progress frames, see [HeartbeatTick.runDuringBolus]. A queue busy with another command, or
+     * commands. While our bolus runs there is no reconciliation: the bolus command notes the
+     * heartbeat and answers it once the bolus is settled, see `BolusCommand`. A queue busy with another command, or
      * with one waiting, gets the reconciliation queued behind it: it runs late by the length of
      * that command, not skipped. One waiting reconciliation is enough for any number of heartbeats.
      */
@@ -181,7 +179,7 @@ class ApexPumpPlugin(
         val now = System.currentTimeMillis()
         pumpState.lastHeartbeatAtMs = now
         if (bolusDelivery.heartbeatCame(now)) {
-            aapsLogger.debug(LTag.PUMP, "Apex: heartbeat during our bolus, answered between its progress frames")
+            aapsLogger.debug(LTag.PUMP, "Apex: heartbeat during our bolus, answered when the bolus ends")
             return
         }
         val busy = commandQueue.performing()?.status() ?: "${commandQueue.size()} waiting".takeIf { commandQueue.size() > 0 }
@@ -203,7 +201,7 @@ class ApexPumpPlugin(
     override fun isInitialized(): Boolean = pumpState.isInitialized
 
     /** Stopped, under an alarm or locked: the pump takes no command and delivers nothing. */
-    override fun isSuspended(): Boolean = pumpState.suspended || pumpState.activeAlarmCodes.isNotEmpty() || pumpState.locked
+    override fun isSuspended(): Boolean = pumpState.takesNoCommands
     override fun isBusy(): Boolean = manager.isBusy
     override fun isConnected(): Boolean = connection.isConnected
     override fun isConnecting(): Boolean = connection.isConnecting
@@ -231,7 +229,7 @@ class ApexPumpPlugin(
     override fun executeCustomCommand(customCommand: CustomCommand): PumpEnactResult? = when (customCommand) {
         is ApexHeartbeatTick -> pumpEnactResultProvider().success(heartbeatTick.run(customCommand.heartbeatAtMs)).enacted(false)
         is ApexLinkSetup     -> pumpEnactResultProvider().success(linkSetup()).enacted(false)
-        is ApexHeartbeatOverdue -> pumpEnactResultProvider().success(heartbeatWatch.ask()).enacted(false)
+        is ApexHeartbeatOverdue -> pumpEnactResultProvider().success(heartbeatOverdue.ask()).enacted(false)
         is ApexPair          -> pumpEnactResultProvider().success(manager.readStatus() != null).enacted(false)
         is ApexSetupForAaps  -> pumpSetup.setupForAaps()
         is ApexSetBtPassword -> pumpSetup.changeBtPassword()
@@ -241,13 +239,13 @@ class ApexPumpPlugin(
         }
     }
 
-    /** What a new link needs: the heartbeat period, the version once, which optional objects the pump has, asked each time, and the start position when none is kept. True when the pump answered. */
+    /** What a new link needs: the heartbeat period, the version once, which optional objects the pump has, asked each time, and the start reconciliation when no status is kept, see [HeartbeatTick.startIfNeeded]. True when the pump answered. */
     private fun linkSetup(): Boolean {
         if (!connection.isConnected) return false
         manager.ensureHeartbeatPeriod()
         if (pumpState.version == null) manager.readVersion()
         abilityProbe.probe()
-        startPosition.takeIfAbsent(pumpState.serialNumber)
+        heartbeatTick.startIfNeeded()
         return true
     }
 
@@ -272,7 +270,7 @@ class ApexPumpPlugin(
     private fun refusedByPumpState(): PumpEnactResult? = when {
         !connection.isConnected                          -> failed(rh.gs(R.string.apex_not_connected))
         isSuspended()                                    -> failed(rh.gs(R.string.apex_pump_not_taking_commands))
-        !startPosition.takeIfAbsent(serialNumber())      -> failed(rh.gs(R.string.apex_no_start_position))
+        !heartbeatTick.startIfNeeded()                  -> failed(rh.gs(R.string.apex_no_reconciliation))
         pumpState.settings?.extendedBolusAllowed == true -> {
             notificationManager.post(NotificationId.PUMP_ERROR, rh.gs(R.string.apex_extended_allowed), level = NotificationLevel.URGENT)
             failed(rh.gs(R.string.apex_extended_allowed))

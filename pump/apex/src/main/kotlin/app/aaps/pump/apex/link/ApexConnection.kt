@@ -21,8 +21,9 @@ import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.SingleIn
 
 /**
- * The link to the pump: bringing it up and letting it go, the Bluetooth password it is brought up
- * under, and the watch over a held link that went quiet. What travels over it is the [Listener]'s.
+ * The link to the pump: bringing it up and letting it go, and the Bluetooth password it is brought up
+ * under. What travels over it is the [Listener]'s. A held link that went quiet is found by the watch
+ * over the heartbeat, see `HeartbeatOverdueDeep`.
  */
 @SingleIn(AppScope::class)
 @Inject
@@ -39,9 +40,6 @@ class ApexConnection(
 
     /** Carries the exchanges over the link, see `ApexExchange`. */
     interface Listener {
-
-        /** Whether the pump is busy with something, which proves the link by itself. */
-        val isBusy: Boolean
 
         /** The link is up: nothing of the last one is owed on it. */
         fun onLinkUp()
@@ -317,7 +315,5 @@ class ApexConnection(
 
         /** What AAPS says when its queue has nothing left; matched exactly, see [disconnect]. */
         const val QUEUE_EMPTY_REASON = "Queue empty"
-
-        /** How long a held link may be silent before the pump is asked: one missed heartbeat and a minute. */
     }
 }

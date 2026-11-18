@@ -19,17 +19,12 @@ data class SnapshotEntity(
 data class ActionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val serial: String,
-    val kind: String,
     val acceptedAtMs: Long,
     val amount: Double,
-    /** Always 0: a column of the schema from when an action could be a temporary basal; kept so that the schema stands. */
-    val durationMinutes: Int,
     val type: String,
     val journalTopSeq: Long,
-    val clockOffsetMs: Long,
     val recordSeq: Long?,
     val seenUnits: Double?,
-    val finished: Boolean,
     val done: Boolean
 )
 

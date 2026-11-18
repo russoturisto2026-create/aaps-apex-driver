@@ -21,7 +21,7 @@ class HeartbeatGridTest {
     fun `a heartbeat on the grid needs nothing`() {
         for (minute in listOf(0, 5, 25, 30, 55)) assertEquals(Step.NONE, HeartbeatGrid.stepFor(minute, moving = false, misses = 0, period = 5))
         for (minute in listOf(0, 3, 27, 57)) assertEquals(Step.NONE, HeartbeatGrid.stepFor(minute, moving = false, misses = 0, period = 3))
-        for (minute in 0..59) assertEquals(Step.NONE, HeartbeatGrid.stepFor(minute, moving = false, misses = 0, period = 1))
+        for (minute in listOf(0, 2, 28, 58)) assertEquals(Step.NONE, HeartbeatGrid.stepFor(minute, moving = false, misses = 0, period = 2))
     }
 
     @Test

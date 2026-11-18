@@ -21,8 +21,8 @@ import app.aaps.pump.apex.pulse.TbrGate
 import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.trace.ApexTrace
 import app.aaps.pump.apex.trace.ApexTraceCat
-import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 
 /**
@@ -30,20 +30,20 @@ import dev.zacsweers.metro.SingleIn
  * command is only the beginning: what counts is its state read after, Status V1 showing the
  * temporary basal running with the rate and minutes asked, or not running after a cancel. The
  * row begins at the moment of the order and ends at the moment of the cancel's order: the pump has
- * no better moment, its stamps are only minutes. So the start of 0x0A only proves the running
- * temporary basal is the one just ordered. A command the pump answered with silence is judged the same way, with one more check: the start the pump
- * reports must be in the command's minute, else what runs is an older temporary basal with the same
+ * no better moment, its stamps are only minutes. A command the pump answered with silence is judged
+ * the same way, with one more check: the start worked out from the status must be in the command's minute, else what runs is an older temporary basal with the same
  * numbers. Nothing is sent twice: a second send would be a second order.
  *
  * A new temporary basal over a running one is sent as it is: the pump replaces the running one,
  * and AAPS cuts the old row at the new row's start.
  *
  * The status read after a command done is the last reconciliation, see `TbrJournal`. Before a command
- * goes, the status, the last command and the last finished temporary basal are read: what the pump
- * did since the last read would be covered by the command, so it is settled first, see
+ * goes, the status is read, and the last finished temporary basal when the gate asks for it: what the
+ * pump did since the last read would be covered by the command, so it is settled first, see
  * [settleBeforeCommand].
  * When the pump does not answer that read, a new temporary basal is not sent: the loop decides
- * again. A cancel goes all the same: it only lowers the delivery, and the status confirms it.
+ * again. A cancel goes all the same: it only lowers the delivery, and the status confirms it. Before
+ * it, the status read is settled alone, as on a pump without 0x0B.
  */
 @SingleIn(AppScope::class)
 @Inject
@@ -79,9 +79,9 @@ class TbrCommand(
         val card = statusShows { it.tbrActive && ApexProtocol.sameDose(it.tbrRate, rate) && it.tbrDurationMinutes == wanted }
             ?: return notDone("the status does not show the temporary basal of $rate U/h for $wanted min", R.string.apex_tbr_not_confirmed)
         val offsetMs = ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs())
-        // The start the status works out is the minute of the command, or one before it when the pump's count lags.
+        // With the clocks kept together the start the status works out is never before the minute of the command; it may be one later.
         val startAt = ApexClock.momentOf(TbrFacts.startFromStatus(card.status), offsetMs)
-        if (answer == ApexAnswer.NONE && startAt < ApexClock.minuteStart(sentAt) - ApexClock.MINUTE_MS) {
+        if (answer == ApexAnswer.NONE && startAt < ApexClock.minuteStart(sentAt)) {
             return notDone("no answer to the command, and the temporary basal the pump runs began before it", R.string.apex_tbr_not_confirmed)
         }
         // The row first, then the status after the command is the last reconciliation: a restart in between
@@ -99,7 +99,12 @@ class TbrCommand(
         if (!before.tbrActive) return Outcome(null, enacted = false)
         // A cancel only lowers the delivery, and the status after it says whether it was done: it goes
         // even when the temporary basal part could not be read. Only a new temporary basal waits for it.
-        if (!settled) aapsLogger.warn(LTag.PUMP, "Apex: the temporary basal part could not be read before the cancel; the cancel goes all the same")
+        // The status read now is settled on its own first, as on a pump without 0x0B: after the cancel it
+        // is no longer the last reconciliation, and another's temporary basal it shows would get no row.
+        if (!settled) {
+            aapsLogger.warn(LTag.PUMP, "Apex: the temporary basal part could not be read before the cancel; settled by the status alone, the cancel goes all the same")
+            tbrJournal.settle(serial, before, TbrFacts(null, endAsked = false), ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs()), before.readAtMs)
+        }
         val sentAt = dateUtil.now()
         val answer = exchange.sendControlAndWait(ApexProtocol.ControlOpcode.CANCEL_TBR, ByteArray(0))
         trace.event(ApexTraceCat.STATE, "tbr_cancel_sent", "answer" to answer.name)
@@ -138,14 +143,9 @@ class TbrCommand(
         return Outcome(rh.gs(R.string.apex_tbr_not_settled))
     }
 
-    /** The status read until it says what [check] asks, up to [STATUS_READS] reads; null when it never did, or the pump fell silent. */
-    private fun statusShows(check: (ApexPumpState.StatusCard) -> Boolean): ApexPumpState.StatusCard? {
-        repeat(STATUS_READS) {
-            val card = manager.readStatus() ?: return null
-            if (check(card)) return card
-        }
-        return null
-    }
+    /** The status read until it says what [check] asks, up to [STATUS_READS] reads, see [AwaitResult]; null when it never did, or the pump fell silent. */
+    private fun statusShows(check: (ApexPumpState.StatusCard) -> Boolean): ApexPumpState.StatusCard? =
+        AwaitResult.until(STATUS_READS, pauseMs = 0L, silenceEnds = true, read = manager::readStatus, took = check).takeIf { it.took }?.last
 
     private fun notDone(why: String, comment: Int): Outcome {
         aapsLogger.error(LTag.PUMP, "Apex: temporary basal command not done: $why")
@@ -157,6 +157,5 @@ class TbrCommand(
 
         /** Reads of the status before the command is judged not done: the status follows the acknowledgement by a moment. */
         const val STATUS_READS = 2
-
     }
 }

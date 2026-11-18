@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="apex_pump">Apex</string>
+    <string name="apex_pump" translatable="false">Apex</string>
     <string name="apex_description">Pump driver for the Apex TruCare III insulin pump (Bluetooth).</string>
     <string name="apex_not_ready">Apex: the driver is not ready yet.</string>
     <string name="apex_password_missing">No Bluetooth password is entered in AAPS, so the driver is not working with the pump. Connect the pump on the Apex pump connection screen: its serial, then the current B/P from the pump status screen; for a pump with its password switched off, enter 000000.</string>
@@ -42,12 +42,15 @@
     <string name="apex_scanner_no_bluetooth">Bluetooth is off or not permitted, the pump cannot be looked for</string>
     <string name="apex_bolus_zero">Apex: the bolus is below the smallest step of the pump, nothing sent.</string>
     <string name="apex_refused_by_pump">Apex: the pump refused the command.</string>
-    <string name="apex_no_start_position">Apex: the pump did not answer the read before the command. The command was not sent.</string>
+    <string name="apex_no_reconciliation">Apex: no reconciliation before the command: the pump did not answer, or a bolus runs. The command was not sent.</string>
+    <string name="apex_pump_no_answer">Apex: the pump gave no usable answer to three requests in a row. Nothing more is sent to it until it answers again: its heartbeat, the next command of the loop or a new connection. Check the pump and its connection.</string>
+    <string name="apex_bolus_not_sent">Apex: the pump did not answer before the bolus. The bolus was not sent. Check the pump and its connection.</string>
     <string name="apex_bolus_failed">Apex: the pump did not take the bolus. Check the pump and its connection.</string>
     <string name="apex_bolus_short">Apex: the pump delivered %1$.3f U of the %2$.3f U asked for.</string>
     <string name="apex_pump_not_taking_commands">Apex: the pump is stopped, has an alarm or is locked, so it takes no commands. Check the pump.</string>
     <string name="apex_notice_journal_fault">Apex: the pump wrote a faulty record of the bolus at %1$s. %2$.3f U is written, as the count kept by the pump gives it. Check the bolus in the treatments.</string>
     <string name="apex_notice_implausible_row">Apex: the pump reported a bolus of %2$.3f U at %1$s, more than its reservoir held. Its memory may be at fault. Nothing is written. Check the pump and the treatments.</string>
+    <string name="apex_notice_basal_above_max">Apex: around %1$s the pump delivered %2$.3f U more than its maximum basal can give, and no bolus record explains it. It is written as a bolus at %1$s. Check the pump and the treatments.</string>
     <string name="apex_notice_journal_clean_start">Apex: at %1$s the account of boluses started clean: the pump was last checked against AAPS too long ago to match its journal. Boluses given on the pump before that are not in AAPS, so the insulin on board (IOB) may be wrong. Check the treatments.</string>
     <string name="apex_notice_journal_unlaid">Apex: at %1$s the bolus journal of the pump could not be matched with the boluses in AAPS. Boluses given on the pump before that may be missing in AAPS. The account starts anew from now. Check the treatments.</string>
     <string name="apex_notice_journal_fault_unknown">Apex: the pump did not write the record of a bolus at %1$s, and the count kept by the pump does not tell its amount. Nothing is written. Check the treatments.</string>
@@ -58,7 +61,7 @@
     <string name="apex_setup_done">Apex: the pump is set up for AAPS: extended boluses off, lowest brightness, screen off after 15 s, alarms by vibration.</string>
     <string name="apex_setup_already">Apex: the pump is already set up for AAPS.</string>
     <string name="apex_setup_failed">Apex: the pump settings were not written: %1$s.</string>
-    <string name="apex_value_none">—</string>
+    <string name="apex_value_none" translatable="false">—</string>
     <string name="apex_label_link">Link</string>
     <string name="apex_label_state">Pump</string>
     <string name="apex_tbr_not_confirmed">Apex: the pump does not show the temporary basal running.</string>
@@ -82,11 +85,26 @@
     <string name="apex_select_pump">Select pump</string>
     <string name="apex_change_pump">Change pump</string>
     <string name="apex_no_pump_selected">No pump selected</string>
-    <string name="apex_percent_value">%1$d%%</string>
+    <string name="apex_percent_value" translatable="false">%1$d%%</string>
     <string name="apex_section_state">State</string>
     <string name="apex_section_pump">Pump and driver</string>
     <string name="apex_section_statistics">Statistics</string>
     <string name="apex_section_more">More</string>
+    <string name="apex_section_diagnosis">Diagnosis</string>
+    <string name="apex_diagnosis_probed">Probed at link setup</string>
+    <string name="apex_diagnosis_not_yet">Not yet: the pump is probed when the link is set up</string>
+    <string name="apex_diagnosis_status_v2">Status V2 (0x0C)</string>
+    <string name="apex_diagnosis_last_tbr_command">Last temporary basal command (0x0A)</string>
+    <string name="apex_diagnosis_finished_tbr">Last finished temporary basal (0x0B)</string>
+    <string name="apex_diagnosis_day_record">Daily statistics (0x26)</string>
+    <string name="apex_diagnosis_tbr_history">Temporary basal history (0x27)</string>
+    <string name="apex_diagnosis_last_bolus_record">Last bolus record alone (0x01, parameter 00)</string>
+    <string name="apex_diagnosis_password_service">Password service (ffc0)</string>
+    <string name="apex_diagnosis_password_protocol">Password by protocol (4.12 or newer)</string>
+    <string name="apex_diagnosis_password_sent">Link set up with a password</string>
+    <string name="apex_diagnosis_yes">Yes</string>
+    <string name="apex_diagnosis_no">No</string>
+    <string name="apex_diagnosis_unknown">Not known</string>
     <string name="apex_day_title" comment="The time the comparison starts at (midnight, the start of AAPS or a change of the time zone), then the time it was made at">Delivered from %1$s to %2$s, U</string>
     <string name="apex_day_summary" comment="The difference between the pump and AAPS, then the time the comparison starts at and the time it was made at">Difference %1$+.3f U from %2$s to %3$s</string>
     <string name="apex_day_column_aaps">AAPS</string>
@@ -112,7 +130,10 @@
     <string name="apex_limits_note_differ" comment="%1$.2f is units of insulin, %2$.2f is units per hour">The pump holds %1$.2f U and %2$.2f U/h now. The AAPS values go to the pump at the next heartbeat.</string>
     <string name="apex_limits_note_unknown">The values in the pump are not read yet.</string>
     <string name="apex_limits_written" comment="%1$.2f is units of insulin, %2$.2f is units per hour">The pump now holds the maximum bolus %1$.2f U and the maximum basal %2$.2f U/h, the same as the AAPS settings.</string>
+    <string name="apex_limits_written_tbr_cancelled" comment="%1$.2f is units of insulin, %2$.2f and %3$.2f are units per hour">The pump now holds the maximum bolus %1$.2f U and the maximum basal %2$.2f U/h, the same as the AAPS settings. The temporary basal of %3$.2f U/h was above the new maximum and was cancelled.</string>
+    <string name="apex_limits_tbr_not_cancelled" comment="%1$.2f and %2$.2f are units per hour, %3$s is the reason">The temporary basal of %1$.2f U/h runs above the new maximum basal %2$.2f U/h and could not be cancelled: %3$s. The new limits did not go to the pump; the next heartbeat tries again.</string>
     <string name="apex_limits_failed" comment="%1$.2f is units of insulin, %2$.2f is units per hour, %3$s is the reason">The maximum bolus %1$.2f U and the maximum basal %2$.2f U/h did not go to the pump: %3$s. The AAPS settings already hold them.</string>
+    <string name="apex_day_validated">Last reconciliation: %1$s</string>
     <string name="apex_day_account_none">not compared yet</string>
     <string name="apex_never_connected">Never connected</string>
     <string name="apex_just_now">just now</string>

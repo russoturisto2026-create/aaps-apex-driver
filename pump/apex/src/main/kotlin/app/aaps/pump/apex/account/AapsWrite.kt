@@ -11,25 +11,19 @@ sealed class AapsWrite {
 
     /**
      * One temporary basal row, or a change of one with the same [pumpId]. [rate] is U/h when
-     * [isAbsolute], else percent. [type] is the AAPS temporary basal type by name: NORMAL or PUMP_SUSPEND.
+     * [isAbsolute], else percent. [type] is the AAPS temporary basal type by name, [NORMAL].
      */
     data class Tbr(val pumpId: Long, val startMs: Long, val rate: Double, val isAbsolute: Boolean, val durationMs: Long, val type: String) : AapsWrite()
 
-    /** The running temporary basal row ends at [endMs]; [endPumpId] names the end so that it is written once. */
-    data class StopTbr(val endMs: Long, val endPumpId: Long) : AapsWrite()
+    /** The running temporary basal row ends at [endMs]; the moment also names the end, so that it is written once. */
+    data class StopTbr(val endMs: Long) : AapsWrite()
 
-    /**
-     * Something the user should be told: what it is about, and what the text shows: [detail] for
-     * the kinds that take a word, [units] and the moment [atMs] for a faulty journal cell.
-     */
-    data class Notice(val kind: NoticeKind, val detail: String = "", val units: Double = 0.0, val atMs: Long = 0L) : AapsWrite()
+    /** Something the user should be told: what it is about, and what the text shows: [units] and the moment [atMs]. */
+    data class Notice(val kind: NoticeKind, val units: Double = 0.0, val atMs: Long = 0L) : AapsWrite()
 
     companion object {
 
         /** The AAPS type of an ordinary bolus row and of an ordinary temporary basal row. */
         const val NORMAL = "NORMAL"
-
-        /** The AAPS type of the temporary basal row that stands for the pump's stop. */
-        const val PUMP_SUSPEND = "PUMP_SUSPEND"
     }
 }

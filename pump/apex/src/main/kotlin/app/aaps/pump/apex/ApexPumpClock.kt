@@ -5,13 +5,11 @@ import app.aaps.core.interfaces.logging.AAPSLogger
 import app.aaps.core.interfaces.logging.LTag
 import app.aaps.pump.apex.account.journal.JournalSnapshot
 import app.aaps.pump.apex.account.store.ApexStore
-import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.account.time.ApexClock
 import app.aaps.pump.apex.command.ApexBolusDelivery
 import app.aaps.pump.apex.manager.ApexManager
 import app.aaps.pump.apex.protocol.ApexProtocol
 import app.aaps.pump.apex.state.ApexPumpState
-import java.util.TimeZone
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.SingleIn
@@ -45,17 +43,31 @@ class ApexPumpClock(
     }
 
     /**
+     * Why the pump's clock is to be written at this heartbeat, null when it is not due, see [writeIfDue].
+     * Asked before the picture is read: a heartbeat that writes the clock reads everything first.
+     */
+    fun dueReason(serial: String, storedOffsetMs: Long): String? = when {
+        phoneOffsetMs() != storedOffsetMs    -> "the zone or summer time moved"
+        phoneTimeChanged                     -> "phone time changed"
+        store.clock(serial) == null          -> "first write"
+        clockOff(manager.pumpClockErrorMs()) -> "the heartbeat shows the clock off by ${manager.pumpClockErrorMs()} ms"
+        else                                 -> null
+    }
+
+    /**
      * The pump's clock is the phone's local time. It is written once when the driver first meets the
      * pump, then when the pump's heartbeat shows it off by more than [ApexConst.CLOCK_ERROR_LIMIT_MS],
      * and when the phone's time moved; never while our bolus runs or an alarm is raised. It is written
      * only in the minute after the pump's heartbeat, at the end of the heartbeat's reconciliation:
-     * the next heartbeat is minutes away, and nothing meets it.
+     * the next heartbeat is minutes away, and nothing meets it. A write closes a period: what came
+     * before it is the past, settled in the old time. So that heartbeat reads every object, the journals
+     * too, and the clock is written only when its reconciliation succeeded, see `HeartbeatTick`.
      *
      * When the zone moved, or summer time began or ended, the old time is closed first: every record of the past that could
      * come in the new time and be placed wrong. The temporary basal that runs, ours or not, is ended
      * with its row; the pump writes its record when it ends, stamped with its start, and a record that
-     * straddles the change could not be placed. Then both journals are read again and settled. Only
-     * then the clock is written, and right after it the same rate is ordered again, as ours, for what
+     * straddles the change could not be placed. The journals need nothing more: this heartbeat read and
+     * settled them, and their records are placed by their order, not by their stamps. Then the clock is written, and right after it the same rate is ordered again, as ours, for what
      * was left of it rounded up to the pump's quarter hour, so that the pump does not run without it until the loop orders the next one.
      * A step that fails leaves the clock as it is, and the next heartbeat tries again; what was settled
      * before it is kept, the rows of it are in AAPS already.
@@ -63,23 +75,15 @@ class ApexPumpClock(
      * @param storedOffsetMs the offset the pump's clock stands in
      * @param nowMs now
      * @param endTbr ends the running temporary basal with its row; what is wrong, or null
-     * @param settleJournals reads and settles both journals in the old time; false when the pump stopped answering
      * @param restartTbr orders a temporary basal of the rate (U/h) for the minutes, as ours; what is wrong, or null
      * @return true when the clock was written
      */
     fun writeIfDue(
-        serial: String, storedOffsetMs: Long, nowMs: Long, endTbr: () -> String?, settleJournals: () -> Boolean, restartTbr: (Double, Int) -> String?
+        serial: String, storedOffsetMs: Long, nowMs: Long, endTbr: () -> String?, restartTbr: (Double, Int) -> String?
     ): Boolean {
         val phoneOffsetMs = phoneOffsetMs()
-        val stored = store.clock(serial)
         val zoneMoved = phoneOffsetMs != storedOffsetMs
-        val reason = when {
-            zoneMoved                                                     -> "the zone or summer time moved"
-            phoneTimeChanged                                              -> "phone time changed"
-            stored == null                       -> "first write"
-            clockOff(manager.pumpClockErrorMs()) -> "the heartbeat shows the clock off by ${manager.pumpClockErrorMs()} ms"
-            else                                 -> return false
-        }
+        val reason = dueReason(serial, storedOffsetMs) ?: return false
         if (bolusDelivery.bolusInProgress || pumpState.activeAlarmCodes.isNotEmpty()) return false
         // What ran, to be ordered again after the write: an absolute rate and the minutes left of it.
         var rerun: Pair<Double, Int>? = null
@@ -94,12 +98,8 @@ class ApexPumpClock(
                 }
                 aapsLogger.info(LTag.PUMP, "Apex: the temporary basal ended before the clock write")
             }
-            if (!settleJournals()) {
-                aapsLogger.warn(LTag.PUMP, "Apex: the journals were not settled before the clock write; the write waits for the next heartbeat")
-                return false
-            }
         }
-        val bolusCount = JournalSnapshot(store, serial, SnapshotKind.BOLUS).topSeq()
+        val bolusCount = JournalSnapshot(store, serial).topSeq()
         val write = manager.writeClock(phoneOffsetMs)
         write.failure?.let { failure ->
             aapsLogger.warn(LTag.PUMP, "Apex: clock not written, $failure")

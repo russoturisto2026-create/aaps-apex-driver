@@ -15,6 +15,7 @@ enum class ExactBasalMode(val value: String) {
 
     companion object {
 
+        /** The mode the setting holds; anything else is off. */
         fun of(value: String): ExactBasalMode = entries.firstOrNull { it.value == value } ?: OFF
     }
 }

@@ -58,11 +58,12 @@ class BolusDeep(private val store: ApexStore, private val serial: String) {
      *   the next answer shows it again
      * @param notBeforeMs the moment AAPS registered this pump: a row dated before it is refused by the core
      * @param comparedAtMs the moment this read is compared at, the heartbeat: the window of the faulty cells ends there
+     * @param newestReservoirUnits the reservoir of the newest status read, for the bound, see [PlausibleRecordDeep]
      */
-    fun settleFaults(added: JournalSnapshot.Added, canClose: () -> Boolean, notBeforeMs: Long, nowMs: Long, comparedAtMs: Long = nowMs): Settled? {
+    fun settleFaults(added: JournalSnapshot.Added, canClose: () -> Boolean, notBeforeMs: Long, nowMs: Long, comparedAtMs: Long = nowMs, newestReservoirUnits: Double? = null): Settled? {
         if (added.records.isEmpty() || added.firstRead) return Settled(emptyList())
         val previousTopAtMs = added.previousTopAtMs
-        val bounds = PlausibleRecordDeep(store, serial, nowMs)
+        val bounds = PlausibleRecordDeep(store, serial, nowMs, newestReservoirUnits)
         val faulty = when {
             added.startedOver       -> added.records
             previousTopAtMs == null -> added.records.filter { bounds.implausible(it) }

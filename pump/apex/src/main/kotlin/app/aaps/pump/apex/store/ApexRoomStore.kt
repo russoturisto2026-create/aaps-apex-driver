@@ -1,7 +1,6 @@
 package app.aaps.pump.apex.store
 
 import app.aaps.pump.apex.account.store.Action
-import app.aaps.pump.apex.account.store.ActionKind
 import app.aaps.pump.apex.account.store.ApexStore
 import app.aaps.pump.apex.account.store.ClockLogEntry
 import app.aaps.pump.apex.account.store.ClockOffset
@@ -36,8 +35,7 @@ class ApexRoomStore(private val database: ApexDatabase, private val dao: ApexDao
         dao.putAction(action.toEntity(serial))
     }
 
-    override fun dropActions(serial: String, kind: ActionKind) =
-        dao.dropActions(serial, kind.name)
+    override fun dropActions(serial: String) = dao.dropActions(serial)
 
     override fun clock(serial: String): ClockOffset? = dao.clock(serial)?.let { ClockOffset(it.offsetMs, it.writtenAtMs, it.reason) }
 
@@ -66,8 +64,8 @@ class ApexRoomStore(private val database: ApexDatabase, private val dao: ApexDao
     override fun forgetPump(serial: String) = dao.forgetPump(serial)
 
     private fun ActionEntity.toAction() =
-        Action(id, ActionKind.valueOf(kind), acceptedAtMs, amount, type, journalTopSeq, clockOffsetMs, recordSeq, seenUnits, finished, done)
+        Action(id, acceptedAtMs, amount, type, journalTopSeq, recordSeq, seenUnits, done)
 
     private fun Action.toEntity(serial: String) =
-        ActionEntity(id, serial, kind.name, acceptedAtMs, amount, 0, type, journalTopSeq, clockOffsetMs, recordSeq, seenUnits, finished, done)
+        ActionEntity(id, serial, acceptedAtMs, amount, type, journalTopSeq, recordSeq, seenUnits, done)
 }

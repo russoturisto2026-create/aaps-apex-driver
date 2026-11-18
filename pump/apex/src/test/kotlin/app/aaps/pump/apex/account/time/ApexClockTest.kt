@@ -2,7 +2,6 @@ package app.aaps.pump.apex.account.time
 
 import app.aaps.pump.apex.account.journal.JournalSnapshot
 import app.aaps.pump.apex.account.store.FakeStore
-import app.aaps.pump.apex.account.store.SnapshotKind
 import app.aaps.pump.apex.protocol.ApexResponseFrame
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -14,7 +13,7 @@ class ApexClockTest {
 
     private val store = FakeStore()
     private val serial = "12345678"
-    private val journal = JournalSnapshot(store, serial, SnapshotKind.BOLUS)
+    private val journal = JournalSnapshot(store, serial)
     private val plus8 = 8 * 3600_000L
     private val plus9 = 9 * 3600_000L
 

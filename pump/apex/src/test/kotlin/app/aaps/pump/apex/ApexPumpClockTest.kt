@@ -21,7 +21,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
-/** The clock write: after the phone's time moved the temporary basal ends, the journals are settled, the write, the same rate again. */
+/** The clock write: after the phone's time moved the temporary basal ends, the write, the same rate again. */
 class ApexPumpClockTest {
 
     private val serial = "12345678"
@@ -48,46 +48,33 @@ class ApexPumpClockTest {
     }
 
     @Test
-    fun `the temporary basal ends, the journals are settled, the clock is written, then the same rate again for what was left, rounded up to a quarter hour`() {
+    fun `the temporary basal ends, the clock is written, then the same rate again for what was left, rounded up to a quarter hour`() {
         running(tbrActive = true)
         val steps = ArrayList<String>()
         var again: Pair<Double, Int>? = null
         val written = clock.writeIfDue(
             serial, movedFrom, nowMs,
-            { steps.add("end"); null }, { steps.add("journals"); true }, { rate, minutes -> again = rate to minutes; null }
+            { steps.add("end"); null }, { rate, minutes -> again = rate to minutes; null }
         )
         assertTrue(written)
-        assertEquals(listOf("end", "journals"), steps)
+        assertEquals(listOf("end"), steps)
         verify(manager).writeClock(any())
         assertEquals(1.0 to 30, again)
     }
 
     @Test
-    fun `nothing ran, the journals are settled and nothing is ordered again`() {
+    fun `nothing ran, nothing is ordered again`() {
         running(tbrActive = false)
-        var journals = false
         var again: Pair<Double, Int>? = null
-        assertTrue(clock.writeIfDue(serial, movedFrom, nowMs, { null }, { journals = true; true }, { rate, minutes -> again = rate to minutes; null }))
-        assertTrue(journals)
+        assertTrue(clock.writeIfDue(serial, movedFrom, nowMs, { null }, { rate, minutes -> again = rate to minutes; null }))
         verify(manager).writeClock(any())
         assertNull(again)
     }
 
     @Test
-    fun `journals not settled after the cancel hold the write, and nothing is ordered`() {
+    fun `a temporary basal that would not end holds the write`() {
         running(tbrActive = true)
-        var again = false
-        assertFalse(clock.writeIfDue(serial, movedFrom, nowMs, { null }, { false }, { _, _ -> again = true; null }))
-        verify(manager, never()).writeClock(any())
-        assertFalse(again)
-    }
-
-    @Test
-    fun `a temporary basal that would not end holds the write, and the journals are not read`() {
-        running(tbrActive = true)
-        var journals = false
-        assertFalse(clock.writeIfDue(serial, movedFrom, nowMs, { "no answer" }, { journals = true; true }, { _, _ -> null }))
-        assertFalse(journals)
+        assertFalse(clock.writeIfDue(serial, movedFrom, nowMs, { "no answer" }, { _, _ -> null }))
         verify(manager, never()).writeClock(any())
     }
 
@@ -100,7 +87,7 @@ class ApexPumpClockTest {
         )
         pumpState.applyStatus(status, ByteArray(0), nowMs)
         var touched = false
-        assertTrue(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs, { touched = true; null }, { touched = true; true }, { _, _ -> touched = true; null }))
+        assertTrue(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs, { touched = true; null }, { _, _ -> touched = true; null }))
         assertFalse(touched)
         verify(manager).writeClock(any())
     }
@@ -109,10 +96,10 @@ class ApexPumpClockTest {
     fun `the heartbeat shows the clock off by more than half a second, and only then the clock is written`() {
         ApexClock.clockWritten(store, serial, clock.phoneOffsetMs(), nowMs, "first write", 0L)
         whenever(manager.pumpClockErrorMs()).thenReturn(400L)
-        assertFalse(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs + 60_000L, { null }, { true }, { _, _ -> null }))
+        assertFalse(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs + 60_000L, { null }, { _, _ -> null }))
         verify(manager, never()).writeClock(any())
         whenever(manager.pumpClockErrorMs()).thenReturn(-600L)
-        assertTrue(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs + 60_000L, { null }, { true }, { _, _ -> null }))
+        assertTrue(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs + 60_000L, { null }, { _, _ -> null }))
         verify(manager).writeClock(any())
     }
 
@@ -120,8 +107,18 @@ class ApexPumpClockTest {
     fun `the phone's time set, in the same zone, is a clean write without the package`() {
         running(tbrActive = true)
         var touched = false
-        assertTrue(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs, { touched = true; null }, { touched = true; true }, { _, _ -> touched = true; null }))
+        assertTrue(clock.writeIfDue(serial, clock.phoneOffsetMs(), nowMs, { touched = true; null }, { _, _ -> touched = true; null }))
         assertFalse(touched)
         verify(manager).writeClock(any())
+    }
+
+    @Test
+    fun `due - the zone moved, the phone's time changed, the first write, not due when the clock stands right`() {
+        assertEquals("first write", clock.dueReason(serial, clock.phoneOffsetMs()))
+        ApexClock.clockWritten(store, serial, clock.phoneOffsetMs(), nowMs, "first write", 0L)
+        assertNull(clock.dueReason(serial, clock.phoneOffsetMs()))
+        assertEquals("the zone or summer time moved", clock.dueReason(serial, movedFrom))
+        clock.onPhoneTimeChanged(TimeChangeType.TimeChanged)
+        assertEquals("phone time changed", clock.dueReason(serial, clock.phoneOffsetMs()))
     }
 }

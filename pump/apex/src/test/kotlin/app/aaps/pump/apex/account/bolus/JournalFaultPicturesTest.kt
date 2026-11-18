@@ -51,8 +51,9 @@ class JournalFaultPicturesTest {
     }
 
     @Test
-    fun `a record of today with another amount after our command - written as it says, our command is closed without a row`() {
+    fun `a record of today with another amount after our command - written as it says, our command is closed without a row, the journal read again, the rest taken as it is`() {
         bench.ours(acceptedAt, 0.5, 0.5)
+        // The records and the bolus field differ by 0.1 U or more, no bolus runs: the journal is read again.
         assertTrue(bench.settle(listOf(at(0, 12)) + ten().take(9), dayRaw = 220))
         val row = bench.rows().single()
         assertEquals(0.3, row.amountUnits, 1e-9)
@@ -62,8 +63,9 @@ class JournalFaultPicturesTest {
     }
 
     @Test
-    fun `a record that asks nothing after our command - written as it says, nothing, our command is closed without a row`() {
+    fun `a record that asks nothing after our command - written as it says, nothing, our command is closed without a row, the journal read again, the rest taken as it is`() {
         bench.ours(acceptedAt, 0.5, 0.5)
+        // The records and the bolus field differ by 0.1 U or more, no bolus runs: the journal is read again.
         assertTrue(bench.settle(listOf(at(0, 0)) + ten().take(9), dayRaw = 220))
         assertEquals(0.0, bench.rows().single().amountUnits, 1e-9)
         assertTrue(bench.notices().isEmpty())
@@ -76,7 +78,7 @@ class JournalFaultPicturesTest {
         bench.settle(listOf(undated(20)) + ten().take(9), dayRaw = 220)
         bench.written.clear()
         val ourAt = acceptedAt + 60_000L
-        BolusAccount(bench.store, bench.serial).commandAccepted(ourAt, 0.5, "SMB").also { BolusAccount(bench.store, bench.serial).finished(it, 0.5, completed = true) }
+        BolusAccount(bench.store, bench.serial).commandAccepted(ourAt, 0.5, "SMB").also { BolusAccount(bench.store, bench.serial).finished(it, 0.5) }
         assertTrue(bench.settle(listOf(oldCell(), undated(20)) + ten().take(8), dayRaw = 240))
 
         val row = bench.rows().single()
@@ -94,7 +96,7 @@ class JournalFaultPicturesTest {
 
     @Test
     fun `the field moved other than our stopped bolus reported - the cell takes the move, not the report`() {
-        bench.ours(acceptedAt, 0.5, 0.45).let { BolusAccount(bench.store, bench.serial).finished(it, 0.45, completed = false) }
+        bench.ours(acceptedAt, 0.5, 0.45).let { BolusAccount(bench.store, bench.serial).finished(it, 0.45) }
         assertTrue(bench.settle(listOf(oldCell()) + ten().take(9), dayRaw = 226))
         assertOurs(0.65, fault = true)
     }
@@ -120,8 +122,9 @@ class JournalFaultPicturesTest {
     }
 
     @Test
-    fun `a sound record of another amount and a bolus on the pump, our one command - two records, as they are, nothing more`() {
+    fun `a sound record of another amount and a bolus on the pump, our one command - two records, as they are, nothing more, the journal read again, the rest taken as it is`() {
         bench.ours(acceptedAt, 0.5, 0.5)
+        // The records and the bolus field differ by 0.1 U or more, no bolus runs: the journal is read again.
         assertTrue(bench.settle(listOf(at(1, 12), at(0, 16)) + ten().take(8), dayRaw = 232))
 
         assertEquals(listOf(0.4, 0.3), bench.rows().map { Math.round(it.amountUnits * 1000) / 1000.0 })

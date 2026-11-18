@@ -22,17 +22,15 @@ import app.aaps.pump.apex.protocol.ApexResponseFrame
  * The rule. A record is broken when its stamp has no month or no day: no real record is dated
  * that way. A bolus record is broken too when it asks for nothing, immediate and extended both:
  * a bolus that delivered nothing leaves no record, so a record of nothing was never written by
- * the pump. A temporary basal record is broken when its duration is zero: no temporary basal is
- * ordered for no time. Its rate may be zero, that is a real order. The daily statistics
+ * the pump. The daily statistics
  * have no order to check, only the date; a day with no date that comes the same every time is
  * the pump's own record of a day its clock was unset.
  *
  * The way out. A broken cell never comes twice: the next read shows the record. So an answer with
- * a broken record is read again, with the same pause as any other request, up to
- * [READS_PER_JOURNAL] reads in all. An answer that comes the same way every time is not a broken
- * cell but what the pump holds: it is handed on as it is, marked, for the reconciliation to judge
- * (an old record in a new cell, the pump's fault record). Answers that keep changing are not
- * trusted, and the heartbeat's reconciliation is skipped.
+ * a broken record is read again by the one rule of reading again, see [ReadAgainDeep]. An answer that
+ * comes the same way every time is not a broken cell but what the pump holds: it is handed on as it
+ * is, marked, for the reconciliation to judge (an old record in a new cell, the pump's fault record).
+ * Answers that keep changing are not trusted, and the heartbeat's reconciliation is skipped.
  *
  * Only the current data is read again for. In a journal that is the records above the copy the
  * driver keeps: a broken-looking cell inside the copy was judged when it came, and the next read
@@ -44,9 +42,6 @@ import app.aaps.pump.apex.protocol.ApexResponseFrame
  * cell, see [BolusDeep].
  */
 object BrokenRecordDeep {
-
-    /** How many times one journal is read at one heartbeat before the driver stops trying. */
-    const val READS_PER_JOURNAL = 3
 
     /**
      * The first record above the copy [kept] that looks broken, or out of the [bounds] of the last

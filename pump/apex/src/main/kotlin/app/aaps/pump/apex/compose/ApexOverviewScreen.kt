@@ -44,7 +44,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.aaps.core.data.format.NumberFormat
 import app.aaps.core.keys.DoubleKey
@@ -61,11 +60,13 @@ import app.aaps.core.ui.compose.pump.PumpOverviewScreen
 import app.aaps.core.ui.compose.statusLevelToColor
 import app.aaps.core.ui.compose.unitLabel
 import app.aaps.core.ui.compose.valueFormat
+import app.aaps.core.ui.compose.AapsSpacing
 import app.aaps.pump.apex.ApexConst
 import app.aaps.pump.apex.R
 import app.aaps.pump.apex.account.basal.ExactBasalMode
 import app.aaps.pump.apex.protocol.ApexProtocol
 import kotlin.math.abs
+import androidx.compose.material.icons.filled.Memory
 
 /**
  * The pump screen: the status card AAPS draws, then the driver's blocks. State and the pump are
@@ -94,6 +95,7 @@ internal fun ApexOverviewScreen(viewModel: ApexOverviewViewModel) {
 private fun ApexBlocks(viewModel: ApexOverviewViewModel, screen: ApexScreenState) {
     var statisticsOpen by rememberSaveable { mutableStateOf(false) }
     var moreOpen by rememberSaveable { mutableStateOf(false) }
+    var diagnosisOpen by rememberSaveable { mutableStateOf(false) }
     // The house section cards read their styling from a composition local that only the plugin
     // preferences screen provides by itself, so this screen provides it.
     ProvidePreferenceTheme {
@@ -127,6 +129,14 @@ private fun ApexBlocks(viewModel: ApexOverviewViewModel, screen: ApexScreenState
                 onToggle = { moreOpen = !moreOpen },
                 icon = Icons.Filled.Tune
             ) { MoreContent(viewModel, screen.pumpChosen) }
+            if (screen.pumpChosen) {
+                CollapsibleCardSectionContent(
+                    title = TextRef.AndroidRes(R.string.apex_section_diagnosis),
+                    expanded = diagnosisOpen,
+                    onToggle = { diagnosisOpen = !diagnosisOpen },
+                    icon = Icons.Filled.Memory
+                ) { InfoRows(screen.diagnosisRows) }
+            }
         }
     }
 }
@@ -134,7 +144,7 @@ private fun ApexBlocks(viewModel: ApexOverviewViewModel, screen: ApexScreenState
 /** Label on the left, value on the right, a thin line between rows: as AAPS draws its own pump rows. */
 @Composable
 private fun InfoRows(rows: List<PumpInfoRow>) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.medium)) {
         rows.forEachIndexed { index, row ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -157,7 +167,7 @@ private fun InfoRows(rows: List<PumpInfoRow>) {
                 )
             }
             if (index < rows.lastIndex) {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(modifier = Modifier.padding(vertical = AapsSpacing.medium), color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }
@@ -176,13 +186,18 @@ private fun daySummary(day: DayTable?): TextRef {
 @Composable
 private fun DayTableView(day: DayTable?) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.medium),
+        verticalArrangement = Arrangement.spacedBy(AapsSpacing.small)
     ) {
         if (day == null) {
             Text(stringResource(R.string.apex_day_account_none), style = MaterialTheme.typography.bodySmall)
             return@Column
         }
+        Text(
+            text = stringResource(R.string.apex_day_validated, day.validatedText),
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium
+        )
         Text(
             text = stringResource(R.string.apex_day_title, day.fromText, day.atText),
             style = MaterialTheme.typography.bodySmall,
@@ -309,7 +324,7 @@ private fun MoreContent(viewModel: ApexOverviewViewModel, pumpChosen: Boolean) {
     val pumpLimits by viewModel.pumpLimits.collectAsStateWithLifecycle()
     val exactOn = exactBasal != ExactBasalMode.OFF
     var periodOpen by rememberSaveable { mutableStateOf(false) }
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = AapsSpacing.medium)) {
         SettingRow(
             icon = Icons.Filled.Balance,
             title = stringResource(R.string.apex_exact_basal_title),
@@ -335,12 +350,12 @@ private fun MoreContent(viewModel: ApexOverviewViewModel, pumpChosen: Boolean) {
         // The same keys as the AAPS safety and loop settings: a change here is a change there. The pump follows at the next heartbeat.
         LimitSlider(Icons.Filled.Vaccines, stringResource(R.string.apex_max_bolus_title), DoubleKey.SafetyMaxBolus)
         LimitSlider(Icons.Filled.Speed, stringResource(R.string.apex_max_basal_title), DoubleKey.ApsMaxBasal)
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) { LimitsNote(pumpLimits) }
+        Column(modifier = Modifier.padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.small)) { LimitsNote(pumpLimits) }
         SettingDivider()
         Button(
             onClick = viewModel::setupForAaps,
             enabled = pumpChosen && viewModel.canSetUpForAaps(),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+            modifier = Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.small)
         ) {
             Text(stringResource(R.string.apex_setup_for_aaps), style = MaterialTheme.typography.labelMedium)
         }
@@ -358,8 +373,8 @@ private fun MoreContent(viewModel: ApexOverviewViewModel, pumpChosen: Boolean) {
 @Composable
 private fun SettingRow(icon: ImageVector, title: String, note: String?, onClick: () -> Unit, control: @Composable () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.large),
+        verticalArrangement = Arrangement.spacedBy(AapsSpacing.small)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(ICON_SIZE))
@@ -372,12 +387,12 @@ private fun SettingRow(icon: ImageVector, title: String, note: String?, onClick:
     }
 }
 
-private val ICON_SIZE = 24.dp
-private val ICON_GAP = 16.dp
+private val ICON_SIZE = AapsSpacing.xxLarge
+private val ICON_GAP = AapsSpacing.extraLarge
 
 @Composable
 private fun SettingDivider() {
-    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
+    HorizontalDivider(modifier = Modifier.padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.small), color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 /**
@@ -390,7 +405,7 @@ private fun LimitSlider(icon: ImageVector, title: String, key: DoubleKey) {
     val preferences = LocalPreferences.current
     var value by remember { mutableDoubleStateOf(preferences.get(key)) }
     val unitType = key.unitType
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.medium)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(ICON_SIZE))
             Spacer(modifier = Modifier.width(ICON_GAP))
@@ -420,7 +435,7 @@ private fun PeriodDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> U
             Column {
                 ApexConst.HEARTBEAT_PERIODS.forEach { minutes ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { onPick(minutes) }.padding(vertical = 8.dp),
+                        modifier = Modifier.fillMaxWidth().clickable { onPick(minutes) }.padding(vertical = AapsSpacing.medium),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(selected = minutes == current, onClick = { onPick(minutes) })
