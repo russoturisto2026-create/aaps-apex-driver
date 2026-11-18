@@ -15,10 +15,12 @@ object JournalOverlay {
      *
      * @param answer identities of the answer's records, newest first, see `ApexResponseFrame.recordIdentity`
      * @param kept identities of the copy, oldest first
+     * A copy with no record is an empty journal kept: every record of the answer is new.
+     *
      * @return the count of new records, or null when the answer cannot be laid over the copy
      */
     fun newOnTop(answer: List<ByteArray>, kept: List<ByteArray>): Int? {
-        if (kept.isEmpty()) return null
+        if (kept.isEmpty()) return answer.size
         val top = kept.asReversed()
         for (newCount in answer.indices) {
             val overlap = minOf(answer.size - newCount, top.size)

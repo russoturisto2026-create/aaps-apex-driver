@@ -33,6 +33,12 @@ class JournalOverlayTest {
     }
 
     @Test
+    fun `an empty journal kept - every record of the answer is new`() {
+        val answer = listOf(id(2, 5), id(1, 5))
+        assertEquals(2, JournalOverlay.newOnTop(answer, emptyList()))
+    }
+
+    @Test
     fun `an answer that does not show the newest record kept is not laid over the copy`() {
         // Ten new records since the last read: the answer of ten repeats nothing.
         val kept = listOf(id(1, 5), id(2, 5), id(3, 11), id(4, 5), id(5, 10), id(6, 11))

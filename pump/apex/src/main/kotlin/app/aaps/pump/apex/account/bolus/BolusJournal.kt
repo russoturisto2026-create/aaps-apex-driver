@@ -75,20 +75,19 @@ class BolusJournal(
      * An answer that does not show the newest record kept is read again, see [JournalReadAgainDeep].
      * Null when nothing of the answer is kept, and the next answer shows the same records again: the
      * pump fell silent on a read the settling needed, the two reads differed, or a faulty cell came and
-     * the span cannot be closed yet. An answer with no record is silence, see `PlausibleRecordDeep`.
+     * the span cannot be closed yet. An answer with no record read is silence; an empty journal, a count of 0, is a state, see [ApexJournalAnswer.empty].
      * [closeBasal] is called once, before the count is asked how much went in as boluses: the basal
-     * rows of the span must stand by then. When it says they do not, the count is not used and the
-     * answer waits for the next read. [comparedAtMs] is the moment this read is compared at, the
+     * rows of the span stand by then, and what the count moved past them went in as boluses. [comparedAtMs] is the moment this read is compared at, the
      * heartbeat: no row of a faulty cell stands after it, see [BolusDeep]. [deep] false after our bolus: an
      * answer that does not lay over the copy is not read again, the heartbeat does it. [readAgain] true for the
      * answer read once more, see [readJournalAgain]: what it leaves unexplained is taken as it is.
      */
     fun settle(
         serial: String, answer: ApexJournalAnswer<ApexBolusRecord>, end: BolusSpanEnd?, offsetMs: Long, nowMs: Long, comparedAtMs: Long = nowMs,
-        closeBasal: () -> Boolean = { true }, readAgain: Boolean = false, deep: Boolean = true
+        closeBasal: () -> Unit = {}, readAgain: Boolean = false, deep: Boolean = true
     ): BolusReconcileDeep.Checked? {
-        if (answer.entries.isEmpty()) {
-            aapsLogger.warn(LTag.PUMP, "Apex: the bolus answer has no record at all, taken as silence: nothing is settled")
+        if (answer.entries.isEmpty() && !answer.empty) {
+            aapsLogger.warn(LTag.PUMP, "Apex: the bolus answer has no record it could read, taken as silence: nothing is settled")
             return null
         }
         val reconcile = BolusReconcileDeep(aapsLogger, store, trace, serial, ::newestReservoir)
@@ -136,7 +135,7 @@ class BolusJournal(
      */
     private fun settleRows(
         serial: String, answer: ApexJournalAnswer<ApexBolusRecord>, end: BolusSpanEnd?, offsetMs: Long, nowMs: Long, comparedAtMs: Long,
-        closeBasal: () -> Boolean, reconcile: BolusReconcileDeep, readAgain: Boolean, deep: Boolean
+        closeBasal: () -> Unit, reconcile: BolusReconcileDeep, readAgain: Boolean, deep: Boolean
     ): BolusReconcileDeep.Checked? {
         val journal = JournalSnapshot(store, serial)
         val account = BolusAccount(store, serial)
@@ -147,8 +146,8 @@ class BolusJournal(
         var faultyRowId: Long? = null
         // Asked only when a faulty cell, or the statistics, need it: the count asks AAPS for the basal of the span.
         val move = lazy {
-            if (end is BolusSpanEnd.Count && !closeBasal()) BolusMoveDeep.Answer.NotYet("the basal rows of the span are not settled")
-            else BolusMoveDeep(store, serial) { startMs, endMs -> runBlocking { aapsToday.basalBetween(startMs, endMs) } }.over(end)
+            if (end is BolusSpanEnd.Count) closeBasal()
+            BolusMoveDeep(store, serial) { startMs, endMs -> runBlocking { aapsToday.basalBetween(startMs, endMs) } }.over(end)
         }
         val writes = when {
             added.firstRead                                  -> emptyList<AapsWrite>().also { aapsLogger.info(LTag.PUMP, "Apex: ${added.records.size} bolus records kept as the past, nothing of them is written") }

@@ -1,3 +1,30 @@
+# Changes: v4 from 2026.11.18.2 to 2026.11.18.3
+
+## Link
+
+- **An empty answer is a state.** The pump may answer with zeros or with a short frame when it
+  has nothing to tell: no temporary basal, an empty journal. Before, such an answer was asked
+  again and counted toward "the pump does not work". Now it is taken at once as what the pump
+  says.
+- **An answer that cannot be read is no answer.** Before, the refused frame could be handed on
+  as if it were an answer.
+- **The firmware version.** If it cannot be read, the driver works on as with a pump that has no
+  password and asks again at the next link. The user is told once.
+- **The notice "the pump gives no usable answer"** is taken away only after a heartbeat
+  reconciled in full, not after the first usable answer.
+
+## Accounting
+
+- **Journals.** The count of records comes from the frames. A count of 0 is an empty journal;
+  frames past the count are no records. After an empty journal every later record is new.
+- **Daily statistics.** If the pump gives them empty, the driver takes the count of the status.
+- **The day on the screen** is compared from whole minutes: the heartbeat of minute M closes the
+  data up to the end of minute M-1, and the rows of minute M belong to the next period.
+
+## Code
+
+- A branch of the faulty-cell rule that was never taken is removed.
+
 # Changes: v4 from 2026.11.15.1 to 2026.11.18.2
 
 ## Accounting
@@ -95,6 +122,32 @@ The branch `main` holds the v4 driver.
 - While extended boluses are allowed on the pump, the driver takes no command.
 
 ---
+
+# Изменения: v4 с 2026.11.18.2 до 2026.11.18.3
+
+## Связь
+
+- **Пустой ответ — это состояние.** Помпа может ответить нулями или коротким кадром, когда ей
+  нечего сообщить: нет временного базала, журнал пуст. Раньше такой ответ запрашивался заново и
+  шёл в счёт «помпа не работает». Теперь он сразу принимается как то, что помпа сообщила.
+- **Ответ, который не разбирается, — не ответ.** Раньше отвергнутый кадр мог быть передан дальше
+  как ответ.
+- **Версия прошивки.** Если она не читается, драйвер работает дальше, как с помпой без пароля, и
+  спрашивает снова при следующей связи. Пользователь получает одно уведомление.
+- **Уведомление «помпа не даёт пригодного ответа»** снимается только после полностью сведённого
+  пульса, а не после первого годного ответа.
+
+## Учёт
+
+- **Журналы.** Число записей берётся из кадров. Ноль — пустой журнал; кадры сверх числа записями
+  не считаются. После пустого журнала каждая следующая запись — новая.
+- **Суточная статистика.** Если помпа отдаёт её пустой, драйвер берёт счётчик из статуса.
+- **Сравнение за день на экране** ведётся от целых минут: пульс минуты M закрывает данные по
+  конец минуты M−1, а строки минуты M относятся к следующему периоду.
+
+## Код
+
+- Убрана ветка правила сбойной ячейки, которая никогда не выполнялась.
 
 # Изменения: v4 с 2026.11.15.1 до 2026.11.18.2
 

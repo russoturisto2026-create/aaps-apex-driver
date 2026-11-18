@@ -32,9 +32,12 @@ class AapsToday(
         val totalUnits: Double get() = bolusUnits + basalUnits
     }
 
-    /** From [from], the phone's midnight by default, to [now]; null while AAPS has no profile for some of that time. */
+    /**
+     * From [from], the phone's midnight by default, up to [now] and not at it: a row at [now] belongs to
+     * what comes after; null while AAPS has no profile for some of that time.
+     */
     suspend fun count(now: Long = dateUtil.now(), from: Long = MidnightTime.calc(now)): Units? {
-        val boluses = persistenceLayer.getBolusesFromTimeToTime(from, now, true)
+        val boluses = persistenceLayer.getBolusesFromTimeToTime(from, now - 1, true)
             .filter { it.type != BS.Type.PRIMING }
             .sumOf { it.amount }
         return Units(boluses, basalBetween(from, now) ?: return null)

@@ -127,7 +127,7 @@ class ReplayRig(
         doAnswer { journalOf(feeding) }.whenever(manager).readBolusHistory()
         doAnswer { daysOf() }.whenever(manager).readDailyStats()
         doAnswer { statusV2Of() }.whenever(manager).readStatusV2()
-        doAnswer { lastCommandOf(it.getArgument(0)) }.whenever(manager).readLastTbrCommand(any())
+        doAnswer { lastCommandOf() }.whenever(manager).readLastTbrCommand()
         doAnswer { finishedOf() }.whenever(manager).readFinishedTbr()
         // The manager gives the period the user chose, one of 2, 3 or 5 minutes; a bare mock gives 0, and the grid divides by it.
         whenever(manager.heartbeatPeriodMinutes()).thenReturn(ApexConst.HEARTBEAT_PERIOD_DEFAULT)
@@ -193,12 +193,10 @@ class ReplayRig(
         return status
     }
 
-    /** As the manager does: zeros are an answer only while no temporary basal runs. */
-    private fun lastCommandOf(tbrRuns: Boolean): ApexLastTbrCommand? {
+    /** As the manager does: every answer is a state, an empty one too. */
+    private fun lastCommandOf(): ApexLastTbrCommand? {
         val frame = answer('A', feeding)?.let { frameOf(it.hexes.first()) } ?: return null
-        val command = ApexTbrStatus.decode(frame)
-        if (command == null && (tbrRuns || !ApexTbrStatus.isNone(frame))) return null
-        return ApexLastTbrCommand(command, frame.raw)
+        return ApexLastTbrCommand(ApexTbrStatus.decode(frame), frame.raw)
     }
 
     private fun finishedOf(): ApexFinishedTbrAnswer? {

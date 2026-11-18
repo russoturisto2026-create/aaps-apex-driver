@@ -78,7 +78,7 @@ class PictureReader(
             "ours" to bolusGate.ourBolusUnits
         )
         val boluses = if (bolusGate.read) readJournal("bolus journal", manager::readBolusHistory) { BrokenRecordDeep.brokenBolus(it, kept(serial, SnapshotKind.BOLUS), bounds(serial), offsetMs(serial)) } ?: return null else null
-        val days = if (boluses == null || part.days == null) part.days else readJournal("daily statistics after the bolus journal", manager::readDailyStats, BrokenRecordDeep::brokenDay) ?: return null
+        val days = if (boluses == null || part.days == null) part.days else dayOrNone(readJournal("daily statistics after the bolus journal", manager::readDailyStats, BrokenRecordDeep::brokenDay) ?: return null)
         return part.picture(boluses, bolusGate, days)
     }
 
@@ -89,7 +89,7 @@ class PictureReader(
      */
     fun refresh(picture: PumpPicture): PumpPicture? {
         val status = manager.readStatus() ?: return silent("Status V1 read again")
-        val days = if (picture.days == null) null else readJournal("daily statistics read again", manager::readDailyStats, BrokenRecordDeep::brokenDay) ?: return null
+        val days = if (picture.days == null) null else dayOrNone(readJournal("daily statistics read again", manager::readDailyStats, BrokenRecordDeep::brokenDay) ?: return null)
         return picture.withNumbers(status, days)
     }
 
@@ -106,7 +106,7 @@ class PictureReader(
 
     private fun readBasalPart(heartbeatAtMs: Long, serial: String, status: ApexPumpState.StatusCard, readAll: Boolean): BasalPart? {
         val abilities = ApexAbilities.of(store, serial, pumpState.version?.firmwareText)
-        val days = if (abilities.dayRecord) readJournal("daily statistics", manager::readDailyStats, BrokenRecordDeep::brokenDay) ?: return null else null
+        val days = if (abilities.dayRecord) dayOrNone(readJournal("daily statistics", manager::readDailyStats, BrokenRecordDeep::brokenDay) ?: return null) else null
         val hasStatusV2 = abilities.statusV2
         // Status V2 goes to the pump state as it is read; the picture does not hold it.
         if (hasStatusV2 && (pumpState.statusV2 == null || HeartbeatGrid.onHalfHour(HeartbeatGrid.minuteOf(heartbeatAtMs)))) manager.readStatusV2() ?: return silent("Status V2")
@@ -120,6 +120,13 @@ class PictureReader(
         trace.event(ApexTraceCat.STATE, "tbr_gate", "read" to tbrGate.read, "reason" to tbrGate.reason)
         val tbr = if (tbrGate.read) tbrReader.read(serial) ?: return null else null
         return BasalPart(heartbeatAtMs, status, days, tbr, tbrGate)
+    }
+
+    /** The daily statistics, or none when the pump says it holds no day: then the count of Status V1 is all there is. */
+    private fun dayOrNone(read: JournalRead<ApexDailyRecord>): JournalRead<ApexDailyRecord>? {
+        if (!read.answer.empty) return read
+        aapsLogger.info(LTag.PUMP, "Apex: the daily statistics hold no day, the count of Status V1 is used")
+        return null
     }
 
     /** One journal, [what], read by the one rule of reading again, see [ReadAgainDeep.journal]. */

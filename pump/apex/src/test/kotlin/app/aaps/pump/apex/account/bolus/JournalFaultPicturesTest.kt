@@ -180,9 +180,9 @@ class JournalFaultPicturesTest {
     }
 
     @Test
-    fun `an answer with no record at all is silence - nothing is settled, our command waits`() {
+    fun `an answer that declares records and has none read is silence - nothing is settled, our command waits`() {
         bench.ours(acceptedAt, 0.5, 0.5)
-        assertFalse(bench.settle(emptyList(), dayRaw = 220))
+        assertFalse(bench.settle(emptyList(), dayRaw = 220, recordCount = 128))
 
         assertTrue(bench.rows().isEmpty())
         assertEquals(1, bench.openCommands().size)

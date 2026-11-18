@@ -52,9 +52,16 @@ class DayWindowTest {
         move(count(at(1, 15), bolus = 0.5))
         val writtenAtMs = at(1, 20) + 15_000L
         val start = move(count(at(1, 25), dayKey = day7, offsetMs = plus3, bolus = 0.0), writtenAtMs)
-        assertEquals(writtenAtMs, start.atMs)
+        assertEquals(at(1, 20), start.atMs)
         assertEquals(0.0, start.bolusUnits)
         assertEquals(start, move(count(at(1, 30), dayKey = day7, offsetMs = plus3, bolus = 0.4), writtenAtMs))
+    }
+
+    @Test
+    fun `the start is the whole minute of the heartbeat - the rows the pump wrote after it begin at its minute`() {
+        // 18.11: the heartbeat of 17:22 came at 17:22:00.283; the stopped bolus after it has its row at 17:22:00.000.
+        val first = move(count(at(17, 22) + 283L, bolus = 261.225))
+        assertEquals(at(17, 22), first.atMs)
     }
 
     @Test

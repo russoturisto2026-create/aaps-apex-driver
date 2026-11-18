@@ -84,7 +84,6 @@ class Reconciliation(
                 tbrSettled = true
                 tbrJournal.settle(serial, picture.status, picture.tbr, offsetMs, ApexClock.minuteStart(picture.heartbeatAtMs))
             }
-            true
         }
         val checked = picture.boluses?.let {
             bolusJournal.settle(serial, it.answer, spanEnd(picture), offsetMs, picture.readAtMs, comparedAtMs = picture.heartbeatAtMs, closeBasal = settleTbr)
@@ -104,7 +103,7 @@ class Reconciliation(
      * what it leaves is taken as it is. The picture with the numbers read anew, or null when the pump did
      * not answer or the journal was not settled.
      */
-    private fun readAgain(serial: String, picture: PumpPicture, offsetMs: Long, settleTbr: () -> Boolean): PumpPicture? {
+    private fun readAgain(serial: String, picture: PumpPicture, offsetMs: Long, settleTbr: () -> Unit): PumpPicture? {
         val answer = bolusJournal.readJournalAgain(serial, offsetMs) ?: return null
         val fresh = reader.refresh(picture) ?: return null
         bolusJournal.settle(serial, answer, spanEnd(fresh), offsetMs, fresh.readAtMs, comparedAtMs = picture.heartbeatAtMs, closeBasal = settleTbr, readAgain = true) ?: return null

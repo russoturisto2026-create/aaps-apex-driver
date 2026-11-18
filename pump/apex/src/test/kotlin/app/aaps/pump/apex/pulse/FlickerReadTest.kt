@@ -62,8 +62,8 @@ class FlickerReadTest {
     }
 
     @Test
-    fun `an answer with no record at all is silence - asked again, nothing is handed on after three reads, the pump is taken as not working`() {
-        assertNull(reader.readJournal("bolus journal", { reads++; answerOf(emptyList()) }, BrokenRecordDeep::brokenBolus))
+    fun `an answer that declares records and has none read is silence - asked again, nothing is handed on after three reads, the pump is taken as not working`() {
+        assertNull(reader.readJournal("bolus journal", { reads++; ApexJournalAnswer(emptyList<ApexRead<ApexBolusRecord>>(), 128) }, BrokenRecordDeep::brokenBolus))
         assertEquals(3, reads)
         verify(manager).pumpNotWorking(anyString())
     }

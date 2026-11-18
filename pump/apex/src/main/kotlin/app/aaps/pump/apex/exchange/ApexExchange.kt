@@ -163,15 +163,11 @@ class ApexExchange(
         sender: () -> Boolean
     ): ApexResponseFrame? = runExchange(what, match, null, 0, sender = sender).answer
 
-    /**
-     * Whether the exchange was answered, and by which frame when a single one answered it.
-     * [unsound]: the last answer of a read that [runExchange]'s `valid` refused, when no sound one came.
-     */
+    /** Whether the exchange was answered, and by which frame when a single one answered it. */
     private class Exchanged(
         val answered: Boolean,
         val answer: ApexResponseFrame?,
-        val frames: List<ApexResponseFrame> = emptyList(),
-        val unsound: ApexResponseFrame? = null
+        val frames: List<ApexResponseFrame> = emptyList()
     )
 
     /**
@@ -213,7 +209,6 @@ class ApexExchange(
             keepRequestsApart()
             keepClearOfHeartbeat()
             var asked = 0
-            var unsound: ApexResponseFrame? = null
             while (true) {
                 asked++
                 val latch = arm(match, burstOf)
@@ -241,12 +236,11 @@ class ApexExchange(
                     finished(what, true, outcome.word, queuedAt, startedAt)
                     return synchronized(waitLock) { Exchanged(true, answer, ArrayList(burstCollected)) }
                 }
-                if (outcome == Ask.UNSOUND) unsound = answer
                 val dropped = usableAnswer(outcome, silenceDropsLink)?.let { pumpDown.noteReachability(reached = it, why = outcome.word) } == true
                 if (dropped || !askAgain(outcome, asked, read)) {
                     abort()
                     finished(what, false, outcome.word, queuedAt, startedAt)
-                    return Exchanged(false, null, unsound = unsound)
+                    return Exchanged(false, null)
                 }
                 val seen = if (outcome == Ask.UNSOUND) " (${answer?.raw?.let { ApexFrame.hex(it) }})" else ""
                 aapsLogger.warn(LTag.PUMPCOMM, "Apex: ${outcome.text} $what$seen; asked again, ${asked + 1} of ${ReadAgainDeep.READS}")
@@ -287,6 +281,9 @@ class ApexExchange(
     /** Three reads in a row brought nothing, [why]: the pump is taken as not working, see [PumpDownDeep]. */
     fun pumpNotWorking(why: String) = pumpDown.notWorking(why)
 
+    /** A heartbeat reconciled in full: the notice that the pump gives no usable answer goes, see [PumpDownDeep]. */
+    fun pumpReconciled() = pumpDown.onReconciled()
+
     /** Drop anything left over from a failed exchange. */
     private fun abort() {
         disarm()
@@ -301,12 +298,12 @@ class ApexExchange(
      * [valid] refuses it, see [runExchange].
      * [silenceDropsLink] false for a probe, see [runExchange].
      *
-     * @return the frame [valid] took; when none did by the last ask, the last frame it refused, for
-     *   the caller to judge; null when no frame came
+     * @return the frame [valid] took; null when none did by the last ask: an answer that cannot be
+     *   read is not handed on as if it were one
      */
     fun sendAndWait(opcode: Byte, valid: (ApexResponseFrame) -> Boolean = { true }, silenceDropsLink: Boolean = true, match: (ApexResponseFrame) -> Boolean): ApexResponseFrame? {
         val done = runExchange("read 0x%02X".format(opcode), match, null, 0, read = true, valid = valid, silenceDropsLink = silenceDropsLink) { sendRead(opcode) }
-        return done.answer ?: done.unsound
+        return done.answer
     }
 
     /** Send a control command and wait for the pump to accept or refuse it. */

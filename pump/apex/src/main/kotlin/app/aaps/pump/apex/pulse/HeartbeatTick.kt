@@ -120,6 +120,7 @@ class HeartbeatTick(
 
     /** The few numbers the screen shows of the picture. */
     private fun show(serial: String, picture: PumpPicture, reconciled: Boolean) {
+        if (reconciled) manager.pumpReconciled()
         val today = picture.days?.answer?.entries?.firstOrNull()?.record
         val topBolus = topBolus(serial, picture)
         val offsetMs = ApexClock.offsetMs(store, serial, pumpClock.phoneOffsetMs())

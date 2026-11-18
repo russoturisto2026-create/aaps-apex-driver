@@ -88,14 +88,21 @@ class ApexManager(
     /** Three reads in a row brought nothing, [why]: the pump is taken as not working, see [ApexExchange.pumpNotWorking]. */
     fun pumpNotWorking(why: String) = exchange.pumpNotWorking(why)
 
+    /** A heartbeat was reconciled in full, see [ApexExchange.pumpReconciled]. */
+    fun pumpReconciled() = exchange.pumpReconciled()
+
     /** Read Status V1, what most of what the driver knows comes from. A frame that does not decode is asked for again. */
     fun readStatus(): ApexPumpState.StatusCard? =
         exchange.sendAndWait(ApexProtocol.ReadOpcode.STATUS_V1, valid = { ApexStatusV1.decode(it) != null }) {
             it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.STATUS_V1
         }?.takeIf { ApexStatusV1.decode(it) != null }?.let { pumpState.statusCard }
 
-    /** Read the firmware version, which says whether the pump can be given a Bluetooth password. */
-    fun readVersion(): ApexVersion? = exchange.sendAndWait(ApexProtocol.ReadOpcode.VERSION, valid = { ApexVersion.decode(it) != null }) {
+    /**
+     * Read the firmware version, which says whether the pump can be given a Bluetooth password. A version
+     * that cannot be read does not take the pump as not working: the driver works on without it, see
+     * `ApexPumpPlugin.linkSetup`, so its asks are not counted toward that.
+     */
+    fun readVersion(): ApexVersion? = exchange.sendAndWait(ApexProtocol.ReadOpcode.VERSION, valid = { ApexVersion.decode(it) != null }, silenceDropsLink = false) {
         it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.VERSION
     }?.takeIf { ApexVersion.decode(it) != null }?.let { pumpState.version }
 
@@ -106,41 +113,29 @@ class ApexManager(
 
     /**
      * Read the last temporary basal command the pump accepted. The answer stays the same after that
-     * temporary basal ends or is cancelled, until the next command. A pump that has had no command
-     * since a reset answers with zeros: an answer, not a silence, but only while no temporary basal
-     * runs. With one running, [tbrRuns], the status says there was a command, and zeros, like a
-     * frame that does not decode, are a broken answer: it is asked for again, see `ReadAgainDeep`.
+     * temporary basal ends or is cancelled, until the next command. Every answer is a state of the
+     * pump: one with zeros or a short one, empty, is a pump that has had no command since a reset.
      *
-     * @return the answer, or null when no sound one came
+     * @return the answer, or null when none came
      */
-    fun readLastTbrCommand(tbrRuns: Boolean): ApexLastTbrCommand? {
-        val sound = { frame: ApexResponseFrame -> ApexTbrStatus.decode(frame) != null || (!tbrRuns && ApexTbrStatus.isNone(frame)) }
-        val frame = exchange.sendAndWait(ApexProtocol.ReadOpcode.TBR_ACTIVE, valid = sound) {
+    fun readLastTbrCommand(): ApexLastTbrCommand? {
+        val frame = exchange.sendAndWait(ApexProtocol.ReadOpcode.TBR_ACTIVE) {
             it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.TBR_ACTIVE
         } ?: return null
-        if (!sound(frame)) {
-            aapsLogger.warn(LTag.PUMPCOMM, "Apex: the last temporary basal command came unsound every time${if (tbrRuns) ", though one runs" else ""}: ${ApexFrame.hex(frame.raw)}")
-            return null
-        }
         val command = ApexTbrStatus.decode(frame)
         if (command == null) aapsLogger.debug(LTag.PUMPCOMM, "Apex: no temporary basal command since the pump was reset")
         return ApexLastTbrCommand(command, frame.raw)
     }
 
     /**
-     * Read the last finished temporary basal: how and when it ended. A pump on which none has
-     * finished since a reset answers with zeros or a short frame: an answer, not a silence.
-     *
-     * The object is read when a temporary basal the driver holds open no longer runs: the pump
-     * holds its end, unless it was reset since. An empty answer then is a fault far more
-     * often than a reset, and the pump builds the object anew for every read: it is asked again in
-     * the same count as a silence, see `ReadAgainDeep`, and an answer that stays empty is what
-     * the pump holds.
+     * Read the last finished temporary basal: how and when it ended. Every answer is a state of the
+     * pump: one with zeros or a short one, empty, is a pump on which none has finished since a reset.
+     * It is not asked again and does not count toward the pump not working.
      *
      * @return the answer, or null when none arrived
      */
     fun readFinishedTbr(): ApexFinishedTbrAnswer? {
-        val frame = exchange.sendAndWait(ApexProtocol.ReadOpcode.TBR_FINISHED, valid = { ApexFinishedTbr.decode(it) != null }) {
+        val frame = exchange.sendAndWait(ApexProtocol.ReadOpcode.TBR_FINISHED) {
             it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.TBR_FINISHED
         } ?: return null
         val finished = ApexFinishedTbr.decode(frame)
@@ -313,9 +308,12 @@ class ApexManager(
         val frames = exchange.exchangeForBurst(what, isRecord, burstFrameCap) {
             exchange.send(group, ApexProtocol.MODE_HISTORY, opcode, parameter)
         } ?: return null
-        val decoded = frames.mapNotNull { frame -> decode(frame)?.let { ApexRead(frame, it) } }
+        // The count of records is what the pump says it holds, read from the frames: a frame past it is no record.
+        val count = frames.lastOrNull()?.recordCount ?: -1
+        val decoded = frames.filter { it.recordIndex < count }.mapNotNull { frame -> decode(frame)?.let { ApexRead(frame, it) } }
         decoded.forEach { aapsLogger.debug(LTag.PUMPCOMM, "Apex: ${describe(it.record)}") }
-        return ApexJournalAnswer(decoded, decoded.lastOrNull()?.frame?.recordCount ?: -1)
+        if (count == 0) aapsLogger.debug(LTag.PUMPCOMM, "Apex: the $what holds no record")
+        return ApexJournalAnswer(decoded, count)
     }
 
     /**

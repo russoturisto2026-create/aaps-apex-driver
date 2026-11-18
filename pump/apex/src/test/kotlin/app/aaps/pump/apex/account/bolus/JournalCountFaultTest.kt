@@ -45,16 +45,6 @@ class JournalCountFaultTest {
     }
 
     @Test
-    fun `the basal rows of the span do not stand - nothing written, the answer waits for the next read`() {
-        bench.basalStands = false
-        assertFalse(bench.settleByCount(listOf(oldCell(), at(0, 12)) + ten().take(8), countUnits = 11.5))
-
-        assertEquals(1, bench.basalClosed)
-        assertTrue(bench.written.isEmpty())
-        assertTrue(bench.topIs(ten().first()))
-    }
-
-    @Test
     fun `two faulty cells in one span - one row with the whole rest`() {
         assertTrue(bench.settleByCount(listOf(oldCell(), at(-2, 8)) + ten().take(8), countUnits = 11.0))
 

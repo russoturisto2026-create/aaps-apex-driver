@@ -2,6 +2,7 @@ package app.aaps.pump.apex.state
 
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.pump.apex.ApexConst
+import app.aaps.pump.apex.account.time.ApexClock
 import app.aaps.pump.apex.protocol.ApexProtocol
 import app.aaps.pump.apex.protocol.ApexSettings
 import app.aaps.pump.apex.protocol.ApexStatusV1
@@ -74,7 +75,7 @@ class ApexPumpState() {
             when {
                 value == null        -> _reconcilePoint.value = null
                 value.reconciled     -> _reconcilePoint.value = ReconcilePoint(
-                    atMs = value.heartbeatAtMs,
+                    atMs = ApexClock.minuteStart(value.heartbeatAtMs),
                     fromMs = value.dayFrom?.atMs,
                     counterUnits = value.counterUnits - (value.dayFrom?.counterUnits ?: 0.0),
                     dayBolusUnits = value.dayBolusUnits?.let { it - (value.dayFrom?.bolusUnits ?: 0.0) },
@@ -84,7 +85,8 @@ class ApexPumpState() {
         }
 
     /**
-     * The last moment today is compared at: a heartbeat whose reconciliation ended with nothing put off,
+     * The last moment today is compared at, the whole minute of a heartbeat: the heartbeat of minute M
+     * brings the pump up to M-1:59.999. A heartbeat whose reconciliation ended with nothing put off,
      * the one moment every gap is laid side by side. A picture read while a bolus runs, ours or another's,
      * or with the journal put off, has insulin in the pump's count that AAPS has no row for yet, so it is not one. Kept here and not by the screen, so the screen has
      * one to show as soon as it opens.

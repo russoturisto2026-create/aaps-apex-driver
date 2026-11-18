@@ -64,15 +64,17 @@ class PumpDownDeepTest {
     }
 
     @Test
-    fun `the user is told once - the notice goes with the first usable answer, not with a new link`() {
+    fun `the user is told once - the notice goes only with a full reconciliation, not with a usable answer or a new link`() {
         repeat(3) { deep.noteReachability(reached = false, why = "unsound_answer") }
         deep.onLinkUp()
-        repeat(3) { deep.noteReachability(reached = false, why = "broken_answer") }
+        // On a new link the heartbeat period is answered first; one object then keeps answering broken.
+        deep.noteReachability(reached = true, why = "answered")
+        repeat(3) { deep.noteReachability(reached = false, why = "unsound_answer") }
         assertEquals(listOf(true), told)
 
         deep.onLinkUp()
-        deep.noteReachability(reached = true, why = "ok")
-        deep.noteReachability(reached = true, why = "ok")
+        deep.onReconciled()
+        deep.onReconciled()
         assertEquals(listOf(true, false), told)
     }
 }

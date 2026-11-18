@@ -34,7 +34,10 @@ import app.aaps.pump.apex.protocol.ApexFrame
  * - the answers kept changing, or not every read was answered: the object is not read this time, and
  *   the next heartbeat reads it again.
  *
- * Three reads in a row that brought nothing at all (no answer, or an answer with no record) are a pump
+ * An answer whose count of records is 0 is an empty journal: a state of the pump, taken at once. An
+ * answer whose count says there are records, and none of them could be read, brings nothing.
+ *
+ * Three reads in a row that brought nothing at all (no answer, or an answer with no record read) are a pump
  * that does not work, whatever was read: a fourth read would not help, and no command may go to such a
  * pump. The pump is taken as not working, see [PumpDownDeep]: what runs now ends as not done, a bolus or
  * a temporary basal as a command not carried out.
@@ -63,8 +66,12 @@ object ReadAgainDeep {
         var answered = 0
         repeat(READS) { attempt ->
             val answer = read()
+            if (answer != null && answer.empty) {
+                aapsLogger.info(LTag.PUMP, "Apex: the $what holds no record, read ${attempt + 1} of $READS")
+                return JournalRead(answer, repeatedBroken = false)
+            }
             if (answer == null || answer.entries.isEmpty()) {
-                aapsLogger.warn(LTag.PUMP, "Apex: the $what read ${attempt + 1} of $READS got ${if (answer == null) "no answer" else "no record at all, taken as silence"}")
+                aapsLogger.warn(LTag.PUMP, "Apex: the $what read ${attempt + 1} of $READS got ${if (answer == null) "no answer" else "no record it could read, taken as silence"}")
                 return@repeat
             }
             answered++

@@ -243,10 +243,30 @@ class ApexPumpPlugin(
     private fun linkSetup(): Boolean {
         if (!connection.isConnected) return false
         manager.ensureHeartbeatPeriod()
-        if (pumpState.version == null) manager.readVersion()
+        if (pumpState.version == null) versionRead(manager.readVersion() != null)
         abilityProbe.probe()
         heartbeatTick.startIfNeeded()
         return true
+    }
+
+    /** The user was told the firmware version cannot be read, and it was not read since. */
+    @Volatile private var versionUnreadTold = false
+
+    /**
+     * The firmware version, [read] or not. One that cannot be read does not stop the driver: it works on
+     * without it, as on a pump that has no password, and asks again at the next link. The user is told
+     * once, and the notice goes when it is read.
+     */
+    private fun versionRead(read: Boolean) {
+        if (read) {
+            if (versionUnreadTold) notificationManager.dismiss(NotificationId.UNSUPPORTED_FIRMWARE)
+            versionUnreadTold = false
+            return
+        }
+        aapsLogger.warn(LTag.PUMP, "Apex: the firmware version could not be read, the driver works on without it")
+        if (versionUnreadTold) return
+        versionUnreadTold = true
+        notificationManager.post(NotificationId.UNSUPPORTED_FIRMWARE, rh.gs(R.string.apex_version_unread), level = NotificationLevel.NORMAL)
     }
 
     /** The phone's time moved: the pump's clock follows at the next heartbeat, see [ApexPumpClock]. */

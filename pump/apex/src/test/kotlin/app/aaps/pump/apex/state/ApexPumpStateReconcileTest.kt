@@ -18,6 +18,12 @@ class ApexPumpStateReconcileTest {
     )
 
     @Test
+    fun `the point is the whole minute of the heartbeat - the heartbeat of minute M brings the pump up to M-1 59 999`() {
+        state.lastPicture = picture(120_283L, 3.0, reconciled = true)
+        assertEquals(120_000L, state.reconcilePointFlow.value!!.atMs)
+    }
+
+    @Test
     fun `a heartbeat with something put off is no comparison point`() {
         state.lastPicture = picture(1_000L, 3.0, reconciled = false)
         assertNull(state.reconcilePointFlow.value)
@@ -25,11 +31,11 @@ class ApexPumpStateReconcileTest {
 
     @Test
     fun `the point stays at the last full reconciliation while the next ones are put off`() {
-        state.lastPicture = picture(1_000L, 3.0, reconciled = true)
-        state.lastPicture = picture(301_000L, 3.9, reconciled = false)
-        assertEquals(1_000L, state.reconcilePointFlow.value!!.atMs)
+        state.lastPicture = picture(60_000L, 3.0, reconciled = true)
+        state.lastPicture = picture(360_000L, 3.9, reconciled = false)
+        assertEquals(60_000L, state.reconcilePointFlow.value!!.atMs)
         assertEquals(3.0, state.reconcilePointFlow.value!!.counterUnits, 1e-9)
-        state.lastPicture = picture(601_000L, 8.0, reconciled = true)
-        assertEquals(601_000L, state.reconcilePointFlow.value!!.atMs)
+        state.lastPicture = picture(660_000L, 8.0, reconciled = true)
+        assertEquals(660_000L, state.reconcilePointFlow.value!!.atMs)
     }
 }

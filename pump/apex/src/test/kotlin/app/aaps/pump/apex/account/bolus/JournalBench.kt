@@ -110,7 +110,6 @@ class JournalBench {
     var basalClosed = 0
 
     /** What the settling is told of the basal rows when it asks: false, they could not be made to stand. */
-    var basalStands = true
 
     /** The whole journal of the pump, newest first, as it answers when asked for it. */
     fun thenWhole(records: List<JournalSnapshot.Answered>) = whole.addLast(answerOf(records))
@@ -121,15 +120,15 @@ class JournalBench {
      * explain the field: the journal is read once more and settled against the statistics read anew,
      * [freshDayRaw] when given. The day is kept only when the reconciliation succeeded: true then.
      */
-    fun settle(answer: List<JournalSnapshot.Answered>, dayRaw: Int?, nowMs: Long = NOW_MS, freshDayRaw: Int? = null): Boolean {
+    fun settle(answer: List<JournalSnapshot.Answered>, dayRaw: Int?, nowMs: Long = NOW_MS, freshDayRaw: Int? = null, recordCount: Int = answer.size): Boolean {
         var days = dayRaw?.let { days(it) }
-        lastAnswer = answerOf(answer)
-        val checked = journal.settle(serial, answerOf(answer), days?.let { BolusSpanEnd.DayRecord(it) }, offsetMs = 0L, nowMs = nowMs, closeBasal = { basalClosed++; basalStands })
+        lastAnswer = answerOf(answer, recordCount)
+        val checked = journal.settle(serial, answerOf(answer, recordCount), days?.let { BolusSpanEnd.DayRecord(it) }, offsetMs = 0L, nowMs = nowMs, closeBasal = { basalClosed++ })
             ?: return false
         if (checked.offMove) {
             val again = journal.readJournalAgain(serial, offsetMs = 0L) ?: return false
             days = freshDayRaw?.let { days(it) } ?: days
-            journal.settle(serial, again, days?.let { BolusSpanEnd.DayRecord(it) }, offsetMs = 0L, nowMs = nowMs, closeBasal = { basalClosed++; basalStands }, readAgain = true)
+            journal.settle(serial, again, days?.let { BolusSpanEnd.DayRecord(it) }, offsetMs = 0L, nowMs = nowMs, closeBasal = { basalClosed++ }, readAgain = true)
                 ?: return false
         }
         days?.let { BolusGate(store, serial).keep(JournalRead(it, repeatedBroken = false), nowMs) }
@@ -152,7 +151,7 @@ class JournalBench {
      */
     fun settleByCount(answer: List<JournalSnapshot.Answered>, countUnits: Double, atMs: Long = NOW_MS, pumpDay: Long = PUMP_DAY, reservoirUnits: Double? = null): Boolean {
         val end = BolusSpanEnd.Count(atMs, Delivered.Count(countUnits, pumpDay), reservoirUnits)
-        val checked = journal.settle(serial, answerOf(answer), end, offsetMs = 0L, nowMs = atMs, closeBasal = { basalClosed++; basalStands })
+        val checked = journal.settle(serial, answerOf(answer), end, offsetMs = 0L, nowMs = atMs, closeBasal = { basalClosed++ })
         if (checked != null && !checked.offMove) {
             BolusAccount(store, serial).clearSettledSinceHeartbeat()
             BolusCountMark(store, serial).move(end)
@@ -173,8 +172,8 @@ class JournalBench {
     fun notices(): List<AapsWrite.Notice> = written.filterIsInstance<AapsWrite.Notice>()
     fun openCommands(): List<Action> = BolusAccount(store, serial).openActions()
 
-    private fun answerOf(records: List<JournalSnapshot.Answered>) =
-        ApexJournalAnswer(records.map { ApexRead(it.frame, ApexBolusRecord.decode(it.frame)!!) }, records.size)
+    private fun answerOf(records: List<JournalSnapshot.Answered>, recordCount: Int = records.size) =
+        ApexJournalAnswer(records.map { ApexRead(it.frame, ApexBolusRecord.decode(it.frame)!!) }, recordCount)
 
     /** Today's day of the statistics, 03.11.2026, with the bolus field at [bolusRaw] steps. */
     private fun days(bolusRaw: Int): ApexJournalAnswer<ApexDailyRecord> {

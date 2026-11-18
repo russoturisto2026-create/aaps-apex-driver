@@ -43,6 +43,7 @@
     <string name="apex_bolus_zero">Apex: the bolus is below the smallest step of the pump, nothing sent.</string>
     <string name="apex_refused_by_pump">Apex: the pump refused the command.</string>
     <string name="apex_no_reconciliation">Apex: no reconciliation before the command: the pump did not answer, or a bolus runs. The command was not sent.</string>
+    <string name="apex_version_unread">Apex: the firmware version of the pump could not be read. The driver works on without it and asks again at the next connection.</string>
     <string name="apex_pump_no_answer">Apex: the pump gave no usable answer to three requests in a row. Nothing more is sent to it until it answers again: its heartbeat, the next command of the loop or a new connection. Check the pump and its connection.</string>
     <string name="apex_bolus_not_sent">Apex: the pump did not answer before the bolus. The bolus was not sent. Check the pump and its connection.</string>
     <string name="apex_bolus_failed">Apex: the pump did not take the bolus. Check the pump and its connection.</string>

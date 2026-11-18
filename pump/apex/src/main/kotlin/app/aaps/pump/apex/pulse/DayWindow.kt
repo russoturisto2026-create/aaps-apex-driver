@@ -24,12 +24,15 @@ import app.aaps.pump.apex.account.time.ApexClock
  *   heartbeat that shows it is the start.
  * - The pump's count comes another way than at the start, with its parts or as the total alone:
  *   the two cannot be taken one from the other, so the heartbeat that shows it is the start.
+ * Every start is a whole minute: the heartbeat of minute M brings the pump up to M-1:59.999, and the
+ * rows of what the pump did after it start at M:00, so a start at the millisecond the heartbeat came
+ * would leave them out.
  */
 class DayWindow {
 
     /** The pump's counts of its day at one moment, U, with the day and the offset of its clock. */
     class Count(
-        val atMs: Long,
+        atMs: Long,
         /** The day of the daily statistics, as its clock key. */
         val dayKey: Long,
         val offsetMs: Long,
@@ -39,6 +42,9 @@ class DayWindow {
         /** False when the pump gives the total alone: the parts are not known and are never shown. */
         val parts: Boolean = true
     ) {
+
+        /** The start of the minute the count was taken in, see the rule above. */
+        val atMs: Long = ApexClock.minuteStart(atMs)
 
         fun fromNothing(atMs: Long) = Count(atMs, dayKey, offsetMs, 0.0, 0.0, 0.0, parts)
 

@@ -22,9 +22,10 @@ import app.aaps.pump.apex.trace.ApexTraceCat
  *
  * The way out. The pump is taken as not working: the link is dropped first, then every request is
  * refused until the pump comes back, and what runs now ends as not done. The user is told once,
- * when the pump is taken as not working; the notice goes only with the first usable answer, not with
- * a new link, so that a pump that answers broken again and again does not make it come and go. The broken answers are
- * in the log with their bytes, so that what happens can be seen. The links do not come up by
+ * when the pump is taken as not working; the notice goes only when a heartbeat is reconciled in full,
+ * see [onReconciled]. Not with the first usable answer: on a new link that is the answer to the
+ * heartbeat period, and a pump with one object that keeps answering broken would make the notice come
+ * and go at every link. The broken answers are in the log with their bytes, so that what happens can be seen. The links do not come up by
  * themselves, only a new connect brings one: the next heartbeat watch, a command of the loop, a
  * reconnection. The pump is back with its heartbeat frame, or with a new link.
  */
@@ -33,7 +34,7 @@ class PumpDownDeep(
     private val trace: ApexTrace,
     /** Drops the link, for the reason given. */
     private val dropLink: (String) -> Unit,
-    /** Tells the user: true when the pump is taken as not working, false at the first usable answer after it. */
+    /** Tells the user: true when the pump is taken as not working, false at the first full reconciliation after it. */
     private val tellUser: (Boolean) -> Unit = {}
 ) {
 
@@ -44,7 +45,7 @@ class PumpDownDeep(
     /** Requests in a row with no usable answer, see [noteReachability]. */
     @Volatile private var unreachable = 0
 
-    /** The user was told the pump gives no usable answer, and no usable answer came since. */
+    /** The user was told the pump gives no usable answer, and no heartbeat was reconciled in full since. */
     @Volatile private var told = false
 
     /**
@@ -57,10 +58,6 @@ class PumpDownDeep(
     fun noteReachability(reached: Boolean, why: String): Boolean {
         if (reached) {
             unreachable = 0
-            if (told) {
-                told = false
-                tellUser(false)
-            }
             return false
         }
         unreachable++
@@ -86,6 +83,13 @@ class PumpDownDeep(
         dropLink(why)
         down = true
         unreachable = 0
+    }
+
+    /** A heartbeat was reconciled in full: the pump works, and the notice that it gave no usable answer goes. */
+    fun onReconciled() {
+        if (!told) return
+        told = false
+        tellUser(false)
     }
 
     /** The pump's heartbeat frame came: requests go to it again. */
