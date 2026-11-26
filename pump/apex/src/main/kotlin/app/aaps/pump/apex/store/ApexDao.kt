@@ -27,13 +27,16 @@ abstract class ApexDao {
         putSnapshot(frames)
     }
 
-    // Actions
+    // Bolus cells
 
-    @Query("SELECT * FROM action WHERE serial = :serial ORDER BY acceptedAtMs ASC, id ASC")
-    abstract fun actions(serial: String): List<ActionEntity>
+    @Query("SELECT * FROM bolus_cell WHERE serial = :serial ORDER BY id ASC")
+    abstract fun cells(serial: String): List<BolusCellEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    abstract fun putAction(action: ActionEntity): Long
+    abstract fun putCell(cell: BolusCellEntity): Long
+
+    @Query("DELETE FROM bolus_cell WHERE serial = :serial AND id IN (:ids)")
+    abstract fun dropCells(serial: String, ids: List<Long>)
 
     // Clock
 
@@ -52,6 +55,9 @@ abstract class ApexDao {
     @Query("DELETE FROM clock_log WHERE serial = :serial AND writtenAtMs < :olderThanMs")
     abstract fun pruneClockLog(serial: String, olderThanMs: Long)
 
+    @Query("DELETE FROM clock_log WHERE serial = :serial AND bolusCount > :bolusCount")
+    abstract fun dropClockLogAbove(serial: String, bolusCount: Long): Int
+
     // State notes
 
     @Query("SELECT value FROM state WHERE serial = :serial AND `key` = :key")
@@ -66,8 +72,8 @@ abstract class ApexDao {
     @Query("DELETE FROM snapshot WHERE serial = :serial")
     abstract fun dropSnapshots(serial: String)
 
-    @Query("DELETE FROM action WHERE serial = :serial")
-    abstract fun dropActions(serial: String)
+    @Query("DELETE FROM bolus_cell WHERE serial = :serial")
+    abstract fun dropAllCells(serial: String)
 
     @Query("DELETE FROM clock WHERE serial = :serial")
     abstract fun dropClock(serial: String)
@@ -82,7 +88,7 @@ abstract class ApexDao {
     @Transaction
     open fun forgetPump(serial: String) {
         dropSnapshots(serial)
-        dropActions(serial)
+        dropAllCells(serial)
         dropClock(serial)
         dropClockLog(serial)
         dropStates(serial)

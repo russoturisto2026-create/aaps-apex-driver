@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vaccines
+import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -63,10 +64,9 @@ import app.aaps.core.ui.compose.valueFormat
 import app.aaps.core.ui.compose.AapsSpacing
 import app.aaps.pump.apex.ApexConst
 import app.aaps.pump.apex.R
-import app.aaps.pump.apex.account.basal.ExactBasalMode
+import app.aaps.pump.apex.basal.ExactBasalMode
 import app.aaps.pump.apex.protocol.ApexProtocol
 import kotlin.math.abs
-import androidx.compose.material.icons.filled.Memory
 
 /**
  * The pump screen: the status card AAPS draws, then the driver's blocks. State and the pump are
@@ -95,7 +95,7 @@ internal fun ApexOverviewScreen(viewModel: ApexOverviewViewModel) {
 private fun ApexBlocks(viewModel: ApexOverviewViewModel, screen: ApexScreenState) {
     var statisticsOpen by rememberSaveable { mutableStateOf(false) }
     var moreOpen by rememberSaveable { mutableStateOf(false) }
-    var diagnosisOpen by rememberSaveable { mutableStateOf(false) }
+    val exactBasal by viewModel.exactBasal.collectAsStateWithLifecycle()
     // The house section cards read their styling from a composition local that only the plugin
     // preferences screen provides by itself, so this screen provides it.
     ProvidePreferenceTheme {
@@ -121,7 +121,7 @@ private fun ApexBlocks(viewModel: ApexOverviewViewModel, screen: ApexScreenState
                     expanded = statisticsOpen,
                     onToggle = { statisticsOpen = !statisticsOpen },
                     icon = Icons.Filled.BarChart
-                ) { DayTableView(screen.day) }
+                ) { DayTableView(screen.day, exactOn = exactBasal != ExactBasalMode.OFF) }
             }
             CollapsibleCardSectionContent(
                 title = TextRef.AndroidRes(R.string.apex_section_more),
@@ -129,14 +129,6 @@ private fun ApexBlocks(viewModel: ApexOverviewViewModel, screen: ApexScreenState
                 onToggle = { moreOpen = !moreOpen },
                 icon = Icons.Filled.Tune
             ) { MoreContent(viewModel, screen.pumpChosen) }
-            if (screen.pumpChosen) {
-                CollapsibleCardSectionContent(
-                    title = TextRef.AndroidRes(R.string.apex_section_diagnosis),
-                    expanded = diagnosisOpen,
-                    onToggle = { diagnosisOpen = !diagnosisOpen },
-                    icon = Icons.Filled.Memory
-                ) { InfoRows(screen.diagnosisRows) }
-            }
         }
     }
 }
@@ -181,10 +173,11 @@ private fun daySummary(day: DayTable?): TextRef {
 
 /**
  * Today by AAPS and by the pump, by part, at the moment of the last heartbeat. A gap of a pump step
- * or more is drawn in the warning colour, so it is seen at a glance.
+ * or more is drawn in the warning colour, so it is seen at a glance. The note on a basal gap shows only
+ * with the exact mode off ([exactOn] false): it is the way to close the gap.
  */
 @Composable
-private fun DayTableView(day: DayTable?) {
+private fun DayTableView(day: DayTable?, exactOn: Boolean) {
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.medium),
         verticalArrangement = Arrangement.spacedBy(AapsSpacing.small)
@@ -216,7 +209,8 @@ private fun DayTableView(day: DayTable?) {
         DayRow(stringResource(R.string.apex_day_total), day.total, bold = true)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         AccuracyRow(day.total)
-        NoteText(stringResource(R.string.apex_day_accuracy_note))
+        // The note points to the exact mode: with it on, there is nothing to point to.
+        if (!exactOn) NoteText(stringResource(R.string.apex_day_accuracy_note))
     }
 }
 
@@ -283,7 +277,7 @@ private fun DayRow(label: String, line: DayLine, bold: Boolean) {
     val none = stringResource(R.string.apex_value_none)
     val gap = line.pumpUnits?.let { it - line.aapsUnits }
     // The AAPS side is already on the pump's steps, so a real gap is a whole step; half a step is the edge.
-    val apart = gap != null && abs(gap) >= ApexProtocol.DOSE_SCALE / 2
+    val apart = gap != null && abs(gap) >= ApexProtocol.HALF_STEP
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = tableNumbers, fontWeight = weight, maxLines = 1, softWrap = false, modifier = Modifier.weight(LABEL_WEIGHT))
         Text(
@@ -321,6 +315,7 @@ private fun DayRow(label: String, line: DayLine, bold: Boolean) {
 private fun MoreContent(viewModel: ApexOverviewViewModel, pumpChosen: Boolean) {
     val exactBasal by viewModel.exactBasal.collectAsStateWithLifecycle()
     val heartbeatPeriod by viewModel.heartbeatPeriod.collectAsStateWithLifecycle()
+    val refillEvent by viewModel.refillEvent.collectAsStateWithLifecycle()
     val pumpLimits by viewModel.pumpLimits.collectAsStateWithLifecycle()
     val exactOn = exactBasal != ExactBasalMode.OFF
     var periodOpen by rememberSaveable { mutableStateOf(false) }
@@ -351,6 +346,15 @@ private fun MoreContent(viewModel: ApexOverviewViewModel, pumpChosen: Boolean) {
         LimitSlider(Icons.Filled.Vaccines, stringResource(R.string.apex_max_bolus_title), DoubleKey.SafetyMaxBolus)
         LimitSlider(Icons.Filled.Speed, stringResource(R.string.apex_max_basal_title), DoubleKey.ApsMaxBasal)
         Column(modifier = Modifier.padding(horizontal = AapsSpacing.extraLarge, vertical = AapsSpacing.small)) { LimitsNote(pumpLimits) }
+        SettingDivider()
+        SettingRow(
+            icon = Icons.Filled.WaterDrop,
+            title = stringResource(R.string.apex_refill_event_title),
+            note = stringResource(if (refillEvent) R.string.apex_refill_event_on_note else R.string.apex_refill_event_off_note),
+            onClick = { viewModel.setRefillEvent(!refillEvent) }
+        ) {
+            Switch(checked = refillEvent, onCheckedChange = viewModel::setRefillEvent)
+        }
         SettingDivider()
         Button(
             onClick = viewModel::setupForAaps,

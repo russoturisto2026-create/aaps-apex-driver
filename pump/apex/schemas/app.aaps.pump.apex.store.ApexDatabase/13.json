@@ -1,0 +1,321 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 13,
+    "identityHash": "106e889f9d51909477fef7abd547bfaa",
+    "entities": [
+      {
+        "tableName": "snapshot",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`serial` TEXT NOT NULL, `kind` TEXT NOT NULL, `position` INTEGER NOT NULL, `bytes` BLOB NOT NULL, `readAtMs` INTEGER NOT NULL, PRIMARY KEY(`serial`, `kind`, `position`))",
+        "fields": [
+          {
+            "fieldPath": "serial",
+            "columnName": "serial",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bytes",
+            "columnName": "bytes",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "readAtMs",
+            "columnName": "readAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "serial",
+            "kind",
+            "position"
+          ]
+        }
+      },
+      {
+        "tableName": "bolus_cell",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `serial` TEXT NOT NULL, `seq` INTEGER, `bytes` BLOB, `offsetMs` INTEGER, `acceptedAtMs` INTEGER, `orderedUnits` REAL, `type` TEXT, `topSeqAtCommand` INTEGER, `seenUnits` REAL, `frames` INTEGER NOT NULL, `cancelPressed` INTEGER NOT NULL, `cancelAccepted` INTEGER NOT NULL, `completed` INTEGER NOT NULL, `units` REAL, `atMs` INTEGER, `faulty` INTEGER NOT NULL, `inAaps` INTEGER NOT NULL, `settledAtMs` INTEGER, `dayBolusUnits` REAL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serial",
+            "columnName": "serial",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seq",
+            "columnName": "seq",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bytes",
+            "columnName": "bytes",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "offsetMs",
+            "columnName": "offsetMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "acceptedAtMs",
+            "columnName": "acceptedAtMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "orderedUnits",
+            "columnName": "orderedUnits",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "topSeqAtCommand",
+            "columnName": "topSeqAtCommand",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "seenUnits",
+            "columnName": "seenUnits",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "frames",
+            "columnName": "frames",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cancelPressed",
+            "columnName": "cancelPressed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cancelAccepted",
+            "columnName": "cancelAccepted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completed",
+            "columnName": "completed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "units",
+            "columnName": "units",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "atMs",
+            "columnName": "atMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "faulty",
+            "columnName": "faulty",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inAaps",
+            "columnName": "inAaps",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "settledAtMs",
+            "columnName": "settledAtMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "dayBolusUnits",
+            "columnName": "dayBolusUnits",
+            "affinity": "REAL"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_bolus_cell_serial_seq",
+            "unique": true,
+            "columnNames": [
+              "serial",
+              "seq"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_bolus_cell_serial_seq` ON `${TABLE_NAME}` (`serial`, `seq`)"
+          }
+        ]
+      },
+      {
+        "tableName": "clock",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`serial` TEXT NOT NULL, `offsetMs` INTEGER NOT NULL, `writtenAtMs` INTEGER NOT NULL, `reason` TEXT NOT NULL, PRIMARY KEY(`serial`))",
+        "fields": [
+          {
+            "fieldPath": "serial",
+            "columnName": "serial",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "offsetMs",
+            "columnName": "offsetMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "writtenAtMs",
+            "columnName": "writtenAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "serial"
+          ]
+        }
+      },
+      {
+        "tableName": "clock_log",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `serial` TEXT NOT NULL, `writtenAtMs` INTEGER NOT NULL, `oldOffsetMs` INTEGER, `newOffsetMs` INTEGER NOT NULL, `reason` TEXT NOT NULL, `bolusCount` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serial",
+            "columnName": "serial",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "writtenAtMs",
+            "columnName": "writtenAtMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "oldOffsetMs",
+            "columnName": "oldOffsetMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "newOffsetMs",
+            "columnName": "newOffsetMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bolusCount",
+            "columnName": "bolusCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_clock_log_serial_writtenAtMs",
+            "unique": false,
+            "columnNames": [
+              "serial",
+              "writtenAtMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_clock_log_serial_writtenAtMs` ON `${TABLE_NAME}` (`serial`, `writtenAtMs`)"
+          }
+        ]
+      },
+      {
+        "tableName": "state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`serial` TEXT NOT NULL, `key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`serial`, `key`))",
+        "fields": [
+          {
+            "fieldPath": "serial",
+            "columnName": "serial",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "value",
+            "columnName": "value",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "serial",
+            "key"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '106e889f9d51909477fef7abd547bfaa')"
+    ]
+  }
+}

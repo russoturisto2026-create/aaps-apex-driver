@@ -1,12 +1,11 @@
 package app.aaps.pump.apex.protocol
 
-import app.aaps.pump.apex.deep.HeartbeatOverAnswerDeep
 
 /**
  * Puts response frames back together from the chunks Bluetooth notifications deliver: one frame
  * can come in several chunks, and one chunk can carry several frames. Frames with id 0xA5 are two
  * bytes longer than their length byte says. The heartbeat is found by its form before the stream
- * is cut by length, because it can lie inside another frame, see [HeartbeatOverAnswerDeep].
+ * is cut by length, because it can lie inside another frame, see [HeartbeatOverAnswer].
  */
 class ApexResponseParser {
 
@@ -19,7 +18,7 @@ class ApexResponseParser {
     var crcErrors: Int = 0
         private set
 
-    /** Heartbeats taken out of the middle of the stream, see [HeartbeatOverAnswerDeep]. */
+    /** Heartbeats taken out of the middle of the stream, see [HeartbeatOverAnswer]. */
     var heartbeatsInside: Int = 0
         private set
 
@@ -66,12 +65,12 @@ class ApexResponseParser {
      * head. @return whether a heartbeat was taken out
      */
     private fun takeHeartbeatInside(frames: MutableList<ApexResponseFrame>, within: Int): Boolean {
-        val at = HeartbeatOverAnswerDeep.heartbeatAt(buffer, from = 1) ?: return false
+        val at = HeartbeatOverAnswer.heartbeatAt(buffer, from = 1) ?: return false
         if (at >= within) return false
         val size = ApexProtocol.HEARTBEAT_FRAME_SIZE
         frames.add(ApexResponseFrame(ByteArray(size) { buffer[at + it] }))
         repeat(size) { buffer.removeAt(at) }
-        if (HeartbeatOverAnswerDeep.headIsLost(at, MIN_FRAME_LENGTH)) repeat(at) { buffer.removeAt(0) }
+        if (HeartbeatOverAnswer.headIsLost(at, MIN_FRAME_LENGTH)) repeat(at) { buffer.removeAt(0) }
         heartbeatsInside++
         return true
     }

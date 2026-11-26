@@ -1,6 +1,6 @@
 package app.aaps.pump.apex.pulse
 
-import app.aaps.pump.apex.account.time.ApexClock
+import app.aaps.pump.apex.clock.ApexClock
 import app.aaps.pump.apex.protocol.ApexProtocol
 import java.util.Locale
 import kotlin.math.abs
@@ -60,9 +60,7 @@ object ReplayCompareBasal {
         if (fromBeat >= 0 && pumpDay(all, fromBeat) != pumpDay(all, a.toBeat)) reasons.add("the pump day changes in the period (${pumpDay(all, fromBeat)} to ${pumpDay(all, a.toBeat)})")
         file.clockWrites.filter { it.atMs in (from - ApexClock.MINUTE_MS)..(a.to + ApexClock.MINUTE_MS) }.forEach { reasons.add("clock write at ${ReplayTimeline.clock(it.atMs)}${if (it.changed) " (moved)" else " (same offset)"}") }
         if (a.from != n.from) reasons.add("the periods began at different heartbeats")
-        val pa = all.results[a.toBeat].periodBolusesBefore
-        val pn = none.results[n.toBeat].periodBolusesBefore
-        return (reasons.joinToString("; ").ifEmpty { "no reason found" }) + " [boluses held: all ${fmt(pa)}, none ${fmt(pn)} U]"
+        return reasons.joinToString("; ").ifEmpty { "no reason found" }
     }
 
     private fun perDay(all: ReplayRun, none: ReplayRun, ca: Map<Long, Closed>, cn: Map<Long, Closed>, report: ReplayReport) {

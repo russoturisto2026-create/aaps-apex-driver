@@ -6,7 +6,7 @@ import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.interfaces.queue.Command
 import app.aaps.core.interfaces.queue.CommandQueue
 import app.aaps.core.keys.interfaces.Preferences
-import app.aaps.pump.apex.account.store.ApexStore
+import app.aaps.pump.apex.store.ApexStore
 import app.aaps.pump.apex.command.ApexPair
 import app.aaps.pump.apex.keys.ApexStringKey
 import app.aaps.pump.apex.state.ApexPumpState

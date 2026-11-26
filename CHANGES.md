@@ -1,3 +1,70 @@
+# Changes: v4 from 2026.11.18.3 to 2026.11.27.1
+
+## Bolus accounting
+
+- **The driver's own table of boluses.** The driver keeps one cell for each record of the pump's
+  journal and for each bolus of its own. The row of our bolus is written to AAPS at once and is
+  then corrected by the pump's record.
+- **One reconciliation at the heartbeat.** Every bolus row is held against the pump's daily
+  statistics. If the journal and the statistics do not agree, the user is told the span and the
+  difference, and the loop is opened.
+- **The key of a row comes from the pump's record:** the minute, the amount asked for, the amount
+  delivered.
+- **Faulty records.** A sound record is written as it is. A faulty one gets its dose from the move
+  of the statistics. Several faulty records of one day are written as one row with their sum, at
+  the first of them.
+- **A flickering record** (no date or nothing delivered) makes the journal read again. A record
+  that is faulty in the same way at every read is taken as a faulty cell.
+- **Our bolus with no record** is written by the pump's count, and the user is told.
+- **A record that delivered more than was asked for** is taken as faulty.
+- **A bolus between two steps of the pump** is rounded to the pump's step.
+
+## Start
+
+- **A start reconciliation in place of the clean start.** The driver finds the last bolus in AAPS
+  and loads only what is newer, looks for faulty records and holds the days against the
+  statistics.
+- **Three failed starts in a row:** boluses of the loop are not given, and the user is told.
+- **A journal read whole** is dated by the log of clock changes.
+- **Clean-up of the log of clock changes.** At the start the driver removes the lines whose count
+  of bolus records is higher than the driver's own. Before, such a line gave its old offset to
+  new records, and a record made after a change of the time zone stood an hour off and was taken
+  as faulty.
+- **An error of the driver itself** in settling the journal stops the boluses of the loop, and
+  the user is told.
+
+## Daily statistics
+
+- The driver keeps a copy of the days and renews it at every heartbeat. At a sign of a flicker
+  the day is read again.
+- A faulty record at midnight stands in the day the statistics give it.
+
+## Pumps
+
+- **Only pumps that give the daily statistics** (protocol 4.10 and newer). The driver does not
+  take an older pump and tells the user why.
+- What a pump can do is set by its protocol version, with no trial requests. The section
+  "Diagnosis" is removed.
+- Until the firmware version is read, the driver checks nothing and sends no command.
+
+## Basal
+
+- The last finished temporary basal is read only when the statistics show there was one.
+- In the exact mode, the temporary basal data are not read at a heartbeat that closes its period.
+
+## Screen and settings
+
+- The switch "Insulin change by refill": when the reservoir grows by 5 U or more, an insulin
+  change is written to AAPS. It is off by default.
+- The day total on the screen is the sum of its lines. The day comparison starts at the first
+  heartbeat.
+
+## Code
+
+- The folder `deep` is gone: each rule is where it is used. The files are laid out by what they
+  keep account of: boluses, basal, statistics, clock, writing to AAPS, store, heartbeat.
+- The driver's database is version 13, with migrations from version 8.
+
 # Changes: v4 from 2026.11.18.2 to 2026.11.18.3
 
 ## Link
@@ -122,6 +189,67 @@ The branch `main` holds the v4 driver.
 - While extended boluses are allowed on the pump, the driver takes no command.
 
 ---
+
+# Изменения: v4 с 2026.11.18.3 до 2026.11.27.1
+
+## Учёт болюсов
+
+- **Своя таблица болюсов.** Драйвер хранит по ячейке на каждую запись журнала помпы и на каждый
+  свой болюс. Строка нашего болюса пишется в AAPS сразу и потом уточняется по записи помпы.
+- **Одна сверка на пульсе.** Каждая строка болюса сверяется с суточной статистикой помпы. Если
+  журнал и статистика не сходятся, пользователь получает уведомление с промежутком и разницей,
+  петля размыкается.
+- **Ключ строки — из записи помпы:** минута, заказ, подача.
+- **Сбойные записи.** Исправная запись идёт как есть. Сбойная получает дозу по сдвигу статистики.
+  Несколько сбойных записей за один день пишутся одной строкой с их суммой, у первой из них.
+- **Мерцающая запись** (без даты или без подачи) — журнал читается ещё раз. Запись, сбойная
+  одинаково на всех чтениях, принимается как сбойная ячейка.
+- **Наш болюс без записи** пишется по счётчику помпы, пользователь получает уведомление.
+- **Запись, где подано больше заказанного,** считается сбойной.
+- **Болюс между двумя шагами помпы** округляется до её шага.
+
+## Запуск
+
+- **Сверка при запуске вместо чистого старта.** Драйвер находит последний болюс в AAPS и
+  догружает только то, что новее, ищет сбойные записи и сверяет дни со статистикой.
+- **Три неудачных запуска подряд:** болюсы петли не подаются, пользователь получает уведомление.
+- **Журнал, прочитанный целиком,** датируется по журналу перевода часов.
+- **Чистка журнала перевода часов.** При запуске удаляются строки, у которых счётчик записей
+  болюсов больше, чем у драйвера. Раньше такая строка отдавала свой старый сдвиг новым записям, и
+  запись после смены пояса вставала на час не туда и считалась сбойной.
+- **Ошибка самого драйвера** при разборе журнала останавливает болюсы петли, пользователь
+  получает уведомление.
+
+## Суточная статистика
+
+- Драйвер хранит копию дней и обновляет её на каждом пульсе. При признаке мерцания день читается
+  снова.
+- Сбойная запись на границе полуночи встаёт в тот день, куда её относит статистика.
+
+## Помпы
+
+- **Только помпы с суточной статистикой** (протокол 4.10 и выше). Помпу старше драйвер не
+  принимает и говорит пользователю почему.
+- Что умеет помпа, определяется версией протокола, без пробных запросов. Раздел «Диагностика»
+  убран.
+- Пока версия прошивки не прочитана, драйвер ничего не сверяет и команд не шлёт.
+
+## Базал
+
+- Последний завершённый временный базал читается, только когда статистика показывает, что он был.
+- В точном режиме на пульсе, закрывающем период, данные временного базала не читаются.
+
+## Экран и настройки
+
+- Переключатель «Смена инсулина по заправке»: при росте резервуара на 5 Ед и больше в AAPS
+  пишется смена инсулина. По умолчанию выключен.
+- Итог дня на экране — сумма его строк. Сравнение дня начинается с первого пульса.
+
+## Код
+
+- Папки `deep` больше нет: каждое правило лежит там, где применяется. Файлы разложены по предмету
+  учёта: болюсы, базал, статистика, часы, запись в AAPS, хранилище, пульс.
+- База драйвера — версия 13, с переходами с версии 8.
 
 # Изменения: v4 с 2026.11.18.2 до 2026.11.18.3
 

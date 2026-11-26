@@ -1,10 +1,9 @@
 package app.aaps.pump.apex.exchange
 
 import app.aaps.pump.apex.ApexConst
-import app.aaps.pump.apex.deep.ReadAgainDeep
 import app.aaps.pump.apex.exchange.ApexExchange.Companion.askAgain
-import app.aaps.pump.apex.exchange.ApexExchange.Companion.clockErrorOf
-import app.aaps.pump.apex.exchange.ApexExchange.Companion.heartbeatClearUntil
+import app.aaps.pump.apex.exchange.ExchangeTiming.clockErrorOf
+import app.aaps.pump.apex.exchange.ExchangeTiming.heartbeatClearUntil
 import app.aaps.pump.apex.exchange.ApexExchange.Companion.usableAnswer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -60,7 +59,7 @@ class ApexExchangeTest {
             assertTrue(askAgain(outcome, asked = 2, read = true))
             assertFalse(askAgain(outcome, asked = 3, read = true))
         }
-        assertEquals(3, ReadAgainDeep.READS)
+        assertEquals(3, ReadRule.READS)
     }
 
     @Test

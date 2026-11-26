@@ -9,14 +9,8 @@ All tests were made on one pump with firmware 1.1.1.0 (protocol 4.12). The suppo
 versions (firmware from 1.0.6.25, protocol 4.10 and 4.11) was rebuilt from descriptions and from
 partial captures of the exchange. On such pumps something may not fit.
 
-**If the firmware of your pump is not 1.1.1.0, please send us a screenshot.** When the pump is
-connected, the driver checks what the pump can do and shows it on the Apex pump screen:
-"More" → "Diagnosis". It shows the firmware, the protocol version and the list of objects the
-pump can read, each with "Yes", "No" or "Not known". We need a screenshot of the whole section.
-It is enough to connect the pump: no insulin has to be delivered for this.
-
-Post the screenshot in the Issues of this repository. The Diagnosis section does not show the
-serial number of the pump.
+Pumps with a protocol older than 4.10 give no daily statistics. The driver does not work with
+them and tells the user why.
 
 ## What changed
 
@@ -63,13 +57,8 @@ The full list of changes is in `CHANGES.md`. The terms of use are in `DISCLAIMER
 версий (прошивки с 1.0.6.25, протокол 4.10 и 4.11) воссоздана по описаниям и по неполным захватам
 обмена. На таких помпах возможны несостыковки.
 
-**Если у вас помпа с прошивкой не 1.1.1.0, пожалуйста, пришлите нам снимок экрана.** При
-подключении драйвер сам проверяет, что умеет помпа, и показывает это на экране помпы Apex:
-«Дополнительно» → «Диагностика». Там видны прошивка, версия протокола и список объектов, которые
-помпа умеет читать, с ответом «Да», «Нет» или «Неизвестно». Нужен снимок этого раздела целиком.
-Достаточно подключить помпу: подавать инсулин для этого не нужно.
-
-Снимок выложите в Issues этого репозитория. Серийного номера помпы в разделе «Диагностика» нет.
+Помпы с протоколом старше 4.10 не дают суточной статистики. С ними драйвер не работает и говорит
+пользователю почему.
 
 ## Что изменилось
 

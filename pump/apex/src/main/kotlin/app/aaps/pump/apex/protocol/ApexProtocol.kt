@@ -126,8 +126,11 @@ object ApexProtocol {
     /** One raw unit of a dose, U, or of a rate, U/h. */
     const val DOSE_SCALE = 0.025
 
+    /** Half a step, U: two doses closer than this are the same dose on the pump's scale. */
+    const val HALF_STEP = DOSE_SCALE / 2
+
     /** The same dose or rate on the pump's scale. */
-    fun sameDose(units: Double, otherUnits: Double): Boolean = abs(units - otherUnits) < DOSE_SCALE / 2
+    fun sameDose(units: Double, otherUnits: Double): Boolean = abs(units - otherUnits) < HALF_STEP
 
     /** [units] rounded to the pump's step. */
     fun onStep(units: Double): Double = Math.round(units / DOSE_SCALE) * DOSE_SCALE

@@ -1,7 +1,7 @@
 package app.aaps.pump.apex.pulse
 
-import app.aaps.pump.apex.account.AapsWrite
-import app.aaps.pump.apex.account.time.ApexClock
+import app.aaps.pump.apex.aaps.AapsWrite
+import app.aaps.pump.apex.clock.ApexClock
 
 /** One temporary basal row as the pass left it: its last written form and the stop that ended it, if any. */
 class Episode(val pumpId: Long, var start: Long, var rate: Double, var absolute: Boolean, var lengthMs: Long, val beat: Int) {

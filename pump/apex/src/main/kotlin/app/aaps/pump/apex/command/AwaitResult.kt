@@ -7,7 +7,7 @@ import android.os.SystemClock
  * what counts is its state read after. The state follows the word by a moment, so it is read a few
  * times, until it shows that the command took.
  *
- * This is not a fault, and not the rule of reading an object again (`ReadAgainDeep`): every read here
+ * This is not a fault, and not the rule of reading an object again (`ReadAgain`): every read here
  * may be sound, the pump is only not done yet. So each command has its own way of waiting: how many
  * reads, how far apart, and whether a read the pump does not answer ends the wait or not.
  */

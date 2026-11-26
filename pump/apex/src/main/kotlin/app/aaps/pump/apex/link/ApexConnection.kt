@@ -14,6 +14,7 @@ import app.aaps.pump.apex.R
 import app.aaps.pump.apex.keys.ApexBooleanKey
 import app.aaps.pump.apex.keys.ApexStringKey
 import app.aaps.pump.apex.protocol.ApexFrame
+import app.aaps.pump.apex.pulse.HeartbeatOverdue
 import app.aaps.pump.apex.trace.ApexTrace
 import app.aaps.pump.apex.trace.ApexTraceCat
 import dev.zacsweers.metro.Inject
@@ -23,7 +24,7 @@ import dev.zacsweers.metro.SingleIn
 /**
  * The link to the pump: bringing it up and letting it go, and the Bluetooth password it is brought up
  * under. What travels over it is the [Listener]'s. A held link that went quiet is found by the watch
- * over the heartbeat, see `HeartbeatOverdueDeep`.
+ * over the heartbeat, see `HeartbeatOverdue`.
  */
 @SingleIn(AppScope::class)
 @Inject

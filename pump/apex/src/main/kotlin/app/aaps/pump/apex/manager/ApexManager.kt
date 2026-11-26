@@ -7,7 +7,7 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.interfaces.utils.DateUtil
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.apex.ApexConst
-import app.aaps.pump.apex.account.time.ApexClock
+import app.aaps.pump.apex.clock.ApexClock
 import app.aaps.pump.apex.command.ApexBolusDelivery
 import app.aaps.pump.apex.command.ApexClockWrite
 import app.aaps.pump.apex.command.ApexFailure
@@ -40,7 +40,7 @@ import app.aaps.pump.apex.protocol.ApexVersion
 import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.trace.ApexTrace
 import app.aaps.pump.apex.trace.ApexTraceCat
-import app.aaps.pump.apex.deep.ReadAgainDeep
+import app.aaps.pump.apex.exchange.ReadRule
 import app.aaps.pump.apex.command.AwaitResult
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.AppScope
@@ -93,23 +93,29 @@ class ApexManager(
 
     /** Read Status V1, what most of what the driver knows comes from. A frame that does not decode is asked for again. */
     fun readStatus(): ApexPumpState.StatusCard? =
-        exchange.sendAndWait(ApexProtocol.ReadOpcode.STATUS_V1, valid = { ApexStatusV1.decode(it) != null }) {
-            it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.STATUS_V1
-        }?.takeIf { ApexStatusV1.decode(it) != null }?.let { pumpState.statusCard }
+        readObject(ApexProtocol.ReadOpcode.STATUS_V1) { ApexStatusV1.decode(it) != null }?.let { pumpState.statusCard }
+
+    /**
+     * One object, [opcode], read as a single frame and asked again until [decodes] takes it, see
+     * [ApexExchange.sendAndWait]. Null when no frame was taken. [silenceDropsLink] false for a read the pump
+     * may leave unanswered.
+     */
+    private fun readObject(opcode: Byte, silenceDropsLink: Boolean = true, decodes: (ApexResponseFrame) -> Boolean = { true }): ApexResponseFrame? =
+        exchange.sendAndWait(opcode, valid = decodes, silenceDropsLink = silenceDropsLink) {
+            it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == opcode
+        }
 
     /**
      * Read the firmware version, which says whether the pump can be given a Bluetooth password. A version
      * that cannot be read does not take the pump as not working: the driver works on without it, see
-     * `ApexPumpPlugin.linkSetup`, so its asks are not counted toward that.
+     * `LinkSetup.run`, so its asks are not counted toward that.
      */
-    fun readVersion(): ApexVersion? = exchange.sendAndWait(ApexProtocol.ReadOpcode.VERSION, valid = { ApexVersion.decode(it) != null }, silenceDropsLink = false) {
-        it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.VERSION
-    }?.takeIf { ApexVersion.decode(it) != null }?.let { pumpState.version }
+    fun readVersion(): ApexVersion? =
+        readObject(ApexProtocol.ReadOpcode.VERSION, silenceDropsLink = false) { ApexVersion.decode(it) != null }?.let { pumpState.version }
 
     /** Read Status V2, for the battery. */
-    fun readStatusV2(): ApexStatusV2? = exchange.sendAndWait(ApexProtocol.ReadOpcode.STATUS_V2, valid = { ApexStatusV2.decode(it) != null }) {
-        it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.STATUS_V2
-    }?.takeIf { ApexStatusV2.decode(it) != null }?.let { pumpState.statusV2 }
+    fun readStatusV2(): ApexStatusV2? =
+        readObject(ApexProtocol.ReadOpcode.STATUS_V2) { ApexStatusV2.decode(it) != null }?.let { pumpState.statusV2 }
 
     /**
      * Read the last temporary basal command the pump accepted. The answer stays the same after that
@@ -119,9 +125,7 @@ class ApexManager(
      * @return the answer, or null when none came
      */
     fun readLastTbrCommand(): ApexLastTbrCommand? {
-        val frame = exchange.sendAndWait(ApexProtocol.ReadOpcode.TBR_ACTIVE) {
-            it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.TBR_ACTIVE
-        } ?: return null
+        val frame = readObject(ApexProtocol.ReadOpcode.TBR_ACTIVE) ?: return null
         val command = ApexTbrStatus.decode(frame)
         if (command == null) aapsLogger.debug(LTag.PUMPCOMM, "Apex: no temporary basal command since the pump was reset")
         return ApexLastTbrCommand(command, frame.raw)
@@ -135,9 +139,7 @@ class ApexManager(
      * @return the answer, or null when none arrived
      */
     fun readFinishedTbr(): ApexFinishedTbrAnswer? {
-        val frame = exchange.sendAndWait(ApexProtocol.ReadOpcode.TBR_FINISHED) {
-            it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == ApexProtocol.ReadOpcode.TBR_FINISHED
-        } ?: return null
+        val frame = readObject(ApexProtocol.ReadOpcode.TBR_FINISHED) ?: return null
         val finished = ApexFinishedTbr.decode(frame)
         if (finished != null) aapsLogger.debug(LTag.PUMPCOMM, "Apex: last finished temporary basal ${finished.amountAsked} since key ${finished.startClockSeconds}, ${finished.resultText} at key ${finished.endClockSeconds}")
         else aapsLogger.debug(LTag.PUMPCOMM, "Apex: no temporary basal has finished since the pump was reset")
@@ -153,10 +155,10 @@ class ApexManager(
         val isProfile = { frame: ApexResponseFrame ->
             frame.frameId == ApexProtocol.MODE_HISTORY && frame.objectType == ApexProtocol.ReadOpcode.BASAL_PROFILES
         }
-        // A burst is asked again here, not in the exchange: a silent read counts as one of the reads, see ReadAgainDeep.
-        val answered = ReadAgainDeep.untilAnswered { ask ->
+        // A burst is asked again here, not in the exchange: a silent read counts as one of the reads, see ReadAgain.
+        val answered = ReadRule.untilAnswered { ask ->
             exchange.exchange(
-                "read 0x%02X, ask $ask of ${ReadAgainDeep.READS}".format(ApexProtocol.ReadOpcode.BASAL_PROFILES),
+                "read 0x%02X, ask $ask of ${ReadRule.READS}".format(ApexProtocol.ReadOpcode.BASAL_PROFILES),
                 match = {
                     isProfile(it) &&
                         synchronized(collectedProfiles) { collectedProfiles.size >= it.recordCount && it.recordCount > 0 }
@@ -234,7 +236,7 @@ class ApexManager(
         return if (awaited.took) null else lastProblem
     }
 
-    /** Read the recent boluses, as the pump answers. An answer the pump spoilt is the deep look's to refuse. */
+    /** Read the recent boluses, as the pump answers. An answer the pump spoilt is read again, see `ReadAgain`. */
     fun readBolusHistory(): ApexJournalAnswer<ApexBolusRecord>? =
         readRecords(
             "bolus history", ApexProtocol.HistoryOpcode.LATEST_BOLUS,
@@ -263,8 +265,7 @@ class ApexManager(
 
     /**
      * Read the pump's last bolus record alone: one frame, the newest record, the same as the first of
-     * [readBolusHistory]. Only on firmware that answers it, see `FirmwareDiagnosis.lastBolusRecord`.
-     * Null when no answer came.
+     * [readBolusHistory]. Not asked by the account; kept as the reader of this object. Null when no answer came.
      */
     fun readLastBolusRecord(): ApexJournalAnswer<ApexBolusRecord>? =
         readRecords(
@@ -313,28 +314,12 @@ class ApexManager(
         val decoded = frames.filter { it.recordIndex < count }.mapNotNull { frame -> decode(frame)?.let { ApexRead(frame, it) } }
         decoded.forEach { aapsLogger.debug(LTag.PUMPCOMM, "Apex: ${describe(it.record)}") }
         if (count == 0) aapsLogger.debug(LTag.PUMPCOMM, "Apex: the $what holds no record")
-        return ApexJournalAnswer(decoded, count)
-    }
-
-    /**
-     * Whether the pump sent any frame of the single object [opcode] in answer: nothing is decoded,
-     * any content counts. Its silence is not counted toward giving up the link, for the pump may
-     * not have the object.
-     */
-    fun answersRead(opcode: Byte): Boolean =
-        exchange.sendAndWait(opcode, silenceDropsLink = false) { it.frameId == ApexProtocol.MODE_HISTORY && it.objectType == opcode } != null
-
-    /**
-     * Whether the pump sent at least one frame in answer to a read of the latest records of
-     * [opcode]: nothing is decoded, any content counts. Its silence is not counted toward giving
-     * up the link, see [answersRead].
-     */
-    fun answersLatestRecords(opcode: Byte): Boolean {
-        val isRecord = { frame: ApexResponseFrame -> frame.frameId == ApexProtocol.MODE_HISTORY && frame.objectType == opcode }
-        val frames = exchange.exchangeForBurst("probe of records 0x%02X".format(opcode), isRecord, ApexProtocol.ALIAS_ANSWER_FRAMES, silenceDropsLink = false) {
-            exchange.send(ApexProtocol.GROUP_CONTROL, ApexProtocol.MODE_HISTORY, opcode, ApexProtocol.PARAMETER_LATEST)
-        }
-        return !frames.isNullOrEmpty()
+        // A frame that failed its CRC or did not decode leaves its place empty: the answer is not the pump's.
+        val places = if (burstFrameCap > 0) minOf(burstFrameCap, count) else count
+        val came = decoded.map { it.frame.recordIndex }.toSet()
+        val lost = (0 until places).count { it !in came }
+        if (lost > 0) aapsLogger.warn(LTag.PUMPCOMM, "Apex: the $what came with $lost of $places records missing")
+        return ApexJournalAnswer(decoded, count, lost)
     }
 
     /** Make [index] the active profile and confirm it from the status, which follows the acknowledgement with a delay. */
@@ -431,19 +416,6 @@ class ApexManager(
             }
         )
         return if (awaited.took) null else ApexFailure(lastProblem)
-    }
-
-    /**
-     * Whether the pump answers the read of its last bolus record alone: the bolus journal asked with
-     * [ApexProtocol.PARAMETER_LAST_RECORD]. Nothing is decoded. Its silence is not counted toward giving
-     * up the link, see [answersRead].
-     */
-    fun answersLastBolusRecord(): Boolean {
-        val isRecord = { frame: ApexResponseFrame -> frame.frameId == ApexProtocol.MODE_HISTORY && frame.objectType == ApexProtocol.HistoryOpcode.BOLUS_HISTORY }
-        val frames = exchange.exchangeForBurst("probe of the last bolus record", isRecord, burstFrameCap = 1, silenceDropsLink = false) {
-            exchange.send(ApexProtocol.GROUP_QUERY, ApexProtocol.MODE_HISTORY, ApexProtocol.HistoryOpcode.BOLUS_HISTORY, ApexProtocol.PARAMETER_LAST_RECORD)
-        }
-        return !frames.isNullOrEmpty()
     }
 
     /** The period the user chose last went to the pump on this link, minutes; null when it did not yet. */

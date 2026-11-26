@@ -30,6 +30,9 @@ enum class ApexBooleanKey(
      * watched by the pump's heartbeat. On by default; off for a phone that handles a long link badly.
      */
     HoldLink("apex_hold_link", true, R.string.apex_hold_link_title, R.string.apex_hold_link_summary),
+
+    /** Tell AAPS an insulin change when the reservoir grew, see `Reconciliation`. Off by default: the user picks it on the pump screen. */
+    RefillEvent("apex_refill_event", false, R.string.apex_refill_event_title),
     ;
 
     override val title: TextRef = TextRef.AndroidRes(titleResId)

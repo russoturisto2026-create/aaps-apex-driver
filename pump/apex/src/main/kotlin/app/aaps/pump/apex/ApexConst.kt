@@ -7,7 +7,7 @@ package app.aaps.pump.apex
 object ApexConst {
 
     /** The driver's version, on its screen and in the log at start: the date of the change and its number that day. */
-    const val DRIVER_VERSION = "v4 2026.11.18.3"
+    const val DRIVER_VERSION = "v4 2026.11.27.1"
 
     /** The protocol from which the pump can be given a Bluetooth password. */
     const val PASSWORD_PROTOCOL_MAJOR = 4
@@ -20,6 +20,12 @@ object ApexConst {
      * from whichever client set it last.
      */
     val HEARTBEAT_PERIODS = listOf(2, 3, 5, 6)
+
+    /**
+     * How much the reservoir has to grow since the status kept to be taken as a refill, U. The pump only takes
+     * insulin out, so a growth is a refill; the margin keeps a wrong read of the level from making one.
+     */
+    const val REFILL_MIN_UNITS = 5.0
 
     /** The period of the heartbeat until the user chooses another, minutes. */
     const val HEARTBEAT_PERIOD_DEFAULT = 5

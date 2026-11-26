@@ -1,6 +1,6 @@
 package app.aaps.pump.apex.pulse
 
-import app.aaps.pump.apex.account.time.ApexClock
+import app.aaps.pump.apex.clock.ApexClock
 
 /** Checks 5 and 6: heartbeats with no answer, and the other things that look wrong. */
 object ReplayCheckBeats {
@@ -45,8 +45,8 @@ object ReplayCheckBeats {
         val readTimes = run.results.mapNotNull { r -> r.trace.firstOrNull { it.name == "picture" }?.fields?.get("ms") as? Number }
         report.line("  the picture read moment less the heartbeat moment, as the driver measures it: ${readTimes.firstOrNull()} ms (the driver own clock, not the recorded one)")
         report.line("  places where the driver uses the phone clock while the record is in the past (a replay over the real clock):")
-        report.line("    PictureReader.BasalPart.picture: readAtMs is the real now; HeartbeatTick passes it as nowMs to BolusJournal.settle, the journal copy, PlausibleRecordDeep, and the bolus row ids (id base is now): the ids above are the real now plus a number")
-        report.line("    PlausibleRecordDeep (made by PictureReader.bounds and BolusJournal): a stamp in the future is told from the real now; with the real now far after the record, no record can be future here")
+        report.line("    PictureReader.BasalPart.picture: readAtMs is the real now; HeartbeatTick passes it as nowMs to BolusReconciliation.settle, the cells, the record bounds, and the bolus row ids (id base is now): the ids above are the real now plus a number")
+        report.line("    The record bounds of BolusReconciliation: a stamp in the future is told from the real now; with the real now far after the record, no record can be future here")
         report.line("    ApexStamp.read: of two readings of a stamp it takes the one nearer the real now and drops a reading after it")
         report.line("    PictureReader.offsetMs: the phone zone at the real now, used only when no clock write is stored; the replay stores a clock offset of zero")
         report.line("    HeartbeatTick.writeClockIfDue: passes the real now to the clock writer (the writer is a mock here)")

@@ -1,6 +1,6 @@
 package app.aaps.pump.apex.protocol
 
-import app.aaps.pump.apex.account.bolus.BolusRecordFrames
+import app.aaps.pump.apex.bolus.BolusRecordFrames
 import app.aaps.pump.apex.protocol.CrcUtilTest.Companion.hexToBytes
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -39,31 +39,33 @@ class ApexBolusRecordTest {
     }
 
     @Test
-    fun `an answer with a record of zeros among sound ones looks broken, a sound answer does not`() {
+    fun `an answer with a record of zeros among sound ones flickers, a sound answer does not`() {
         val minute = 1_760_000_000L / 60 * 60
         fun read(requestedRaw: Int) = BolusRecordFrames.record(minute, requestedRaw, requestedRaw).frame.let { ApexRead(it, ApexBolusRecord.decode(it)!!) }
         val sound = ApexJournalAnswer(List(10) { read(16) }, 128)
-        assertTrue(sound.entries.none { it.record.looksBroken })
+        assertTrue(sound.entries.none { it.record.flickers })
         val spoilt = ApexJournalAnswer(List(10) { read(if (it == 6) 0 else 16) }, 128)
-        assertTrue(spoilt.entries[6].record.looksBroken)
+        assertTrue(spoilt.entries[6].record.flickers)
     }
 
     @Test
-    fun `a record without a date looks broken, whatever its amounts`() {
+    fun `a record without a date flickers, whatever its amounts`() {
         // The blank cell the pump answered at the newest place right after a bolus, byte for byte.
         val blank = ApexResponseFrame("aa 16 80 a3 21 00 00 00 00 00 00 3b 00 00 00 00 00 00 00 00 36 01".split(" ").map { it.toInt(16).toByte() }.toByteArray())
         val record = ApexBolusRecord.decode(blank)!!
         assertTrue(record.dateBroken)
-        assertTrue(record.looksBroken)
+        assertTrue(record.flickers)
         // A sound record of the same minute carries its date.
         val minute = 1_760_000_000L / 60 * 60
         assertFalse(ApexBolusRecord.decode(BolusRecordFrames.record(minute, 16, 16).frame)!!.dateBroken)
-        // Asked for something and delivered nothing: a cell cut by zeros after the asked amount, as the pump showed once; it looks broken and is told real only by a read made again.
-        assertTrue(ApexBolusRecord.decode(BolusRecordFrames.record(minute, 16, 0).frame)!!.looksBroken)
-        // Amounts with no month and day look broken as well; a cancel with no bolus running leaves 'asked 0, delivered 0.05', which looks broken too and is told real by a read made again.
+        // Asked for something and delivered nothing: a cell cut by zeros after the asked amount, as the pump showed once; it flickers, the next read shows the record.
+        assertTrue(ApexBolusRecord.decode(BolusRecordFrames.record(minute, 16, 0).frame)!!.flickers)
+        // No month and day: it flickers whatever its amounts.
         val dated = BolusRecordFrames.record(minute, 16, 16).frame.raw.copyOf()
         dated[6] = 0; dated[7] = 0; dated[8] = 0
-        assertTrue(ApexBolusRecord.decode(ApexResponseFrame(dated))!!.looksBroken)
+        assertTrue(ApexBolusRecord.decode(ApexResponseFrame(dated))!!.flickers)
+        // A cancel with no bolus running leaves 'asked 0, delivered 0.05' with its date: a real record, it does not flicker.
+        assertFalse(ApexBolusRecord.decode(BolusRecordFrames.record(minute, 0, 2).frame)!!.flickers)
     }
 
     @Test

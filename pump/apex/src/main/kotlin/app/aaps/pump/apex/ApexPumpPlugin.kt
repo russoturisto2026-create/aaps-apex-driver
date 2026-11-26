@@ -36,15 +36,17 @@ import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.core.keys.interfaces.TextRef
 import app.aaps.core.ui.compose.icons.IcPluginVirtualPump
 import app.aaps.core.ui.compose.preference.PreferenceSubScreenDef
+import app.aaps.pump.apex.clock.ApexPumpClock
+import app.aaps.pump.apex.command.ApexPumpSetup
 import app.aaps.pump.apex.command.ApexBolusDelivery
 import app.aaps.pump.apex.command.ApexPair
 import app.aaps.pump.apex.command.ApexSetBtPassword
 import app.aaps.pump.apex.command.ApexSetupForAaps
 import app.aaps.pump.apex.command.BolusCommand
-import app.aaps.pump.apex.command.TbrCommand
+import app.aaps.pump.apex.basal.TbrCommand
 import app.aaps.pump.apex.compose.ApexComposeContent
-import app.aaps.pump.apex.deep.ApexHeartbeatOverdue
-import app.aaps.pump.apex.deep.HeartbeatOverdueDeep
+import app.aaps.pump.apex.pulse.ApexHeartbeatOverdue
+import app.aaps.pump.apex.pulse.HeartbeatOverdue
 import app.aaps.pump.apex.keys.ApexBooleanKey
 import app.aaps.pump.apex.keys.ApexIntKey
 import app.aaps.pump.apex.keys.ApexIntNonKey
@@ -54,7 +56,7 @@ import app.aaps.pump.apex.manager.ApexManager
 import app.aaps.pump.apex.pulse.ApexHeartbeatTick
 import app.aaps.pump.apex.pulse.ApexLinkSetup
 import app.aaps.pump.apex.pulse.HeartbeatTick
-import app.aaps.pump.apex.state.AbilityProbe
+import app.aaps.pump.apex.pulse.LinkSetup
 import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.store.ApexDatabase
 import app.aaps.pump.apex.trace.ApexTrace
@@ -67,11 +69,11 @@ import dev.zacsweers.metro.SingleIn
 import dev.zacsweers.metro.binding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
@@ -99,11 +101,11 @@ class ApexPumpPlugin(
     notificationManager: NotificationManager,
     private val pumpState: ApexPumpState,
     private val manager: ApexManager,
-    private val abilityProbe: AbilityProbe,
     private val connection: ApexConnection,
     private val database: ApexDatabase,
     private val heartbeatTick: HeartbeatTick,
-    private val heartbeatOverdue: HeartbeatOverdueDeep,
+    private val linkSetup: LinkSetup,
+    private val heartbeatOverdue: HeartbeatOverdue,
     private val bolusCommand: BolusCommand,
     private val bolusDelivery: ApexBolusDelivery,
     private val tbrCommand: TbrCommand,
@@ -137,7 +139,7 @@ class ApexPumpPlugin(
     /** The watch on the link going up, for as long as the plugin runs. */
     private var linkWatch: Job? = null
 
-    /** The watch over the pump's heartbeat, for as long as the plugin runs, see [HeartbeatOverdueDeep]. */
+    /** The watch over the pump's heartbeat, for as long as the plugin runs, see [HeartbeatOverdue]. */
     private var beatWatch: Job? = null
 
     override suspend fun onStart() {
@@ -152,7 +154,7 @@ class ApexPumpPlugin(
         heartbeatOverdue.start(System.currentTimeMillis())
         beatWatch = pluginScope.launch {
             while (isActive) {
-                delay(HeartbeatOverdueDeep.CHECK_MS)
+                delay(HeartbeatOverdue.CHECK_MS)
                 // The asking is launched: the read itself runs in its turn on the queue.
                 if (heartbeatOverdue.check(System.currentTimeMillis())) launch { commandQueue.customCommand(ApexHeartbeatOverdue()) }
             }
@@ -228,7 +230,7 @@ class ApexPumpPlugin(
 
     override fun executeCustomCommand(customCommand: CustomCommand): PumpEnactResult? = when (customCommand) {
         is ApexHeartbeatTick -> pumpEnactResultProvider().success(heartbeatTick.run(customCommand.heartbeatAtMs)).enacted(false)
-        is ApexLinkSetup     -> pumpEnactResultProvider().success(linkSetup()).enacted(false)
+        is ApexLinkSetup     -> pumpEnactResultProvider().success(linkSetup.run()).enacted(false)
         is ApexHeartbeatOverdue -> pumpEnactResultProvider().success(heartbeatOverdue.ask()).enacted(false)
         is ApexPair          -> pumpEnactResultProvider().success(manager.readStatus() != null).enacted(false)
         is ApexSetupForAaps  -> pumpSetup.setupForAaps()
@@ -237,36 +239,6 @@ class ApexPumpPlugin(
             aapsLogger.error(LTag.PUMP, "Apex: unsupported custom command ${customCommand.statusDescription}")
             null
         }
-    }
-
-    /** What a new link needs: the heartbeat period, the version once, which optional objects the pump has, asked each time, and the start reconciliation when no status is kept, see [HeartbeatTick.startIfNeeded]. True when the pump answered. */
-    private fun linkSetup(): Boolean {
-        if (!connection.isConnected) return false
-        manager.ensureHeartbeatPeriod()
-        if (pumpState.version == null) versionRead(manager.readVersion() != null)
-        abilityProbe.probe()
-        heartbeatTick.startIfNeeded()
-        return true
-    }
-
-    /** The user was told the firmware version cannot be read, and it was not read since. */
-    @Volatile private var versionUnreadTold = false
-
-    /**
-     * The firmware version, [read] or not. One that cannot be read does not stop the driver: it works on
-     * without it, as on a pump that has no password, and asks again at the next link. The user is told
-     * once, and the notice goes when it is read.
-     */
-    private fun versionRead(read: Boolean) {
-        if (read) {
-            if (versionUnreadTold) notificationManager.dismiss(NotificationId.UNSUPPORTED_FIRMWARE)
-            versionUnreadTold = false
-            return
-        }
-        aapsLogger.warn(LTag.PUMP, "Apex: the firmware version could not be read, the driver works on without it")
-        if (versionUnreadTold) return
-        versionUnreadTold = true
-        notificationManager.post(NotificationId.UNSUPPORTED_FIRMWARE, rh.gs(R.string.apex_version_unread), level = NotificationLevel.NORMAL)
     }
 
     /** The phone's time moved: the pump's clock follows at the next heartbeat, see [ApexPumpClock]. */

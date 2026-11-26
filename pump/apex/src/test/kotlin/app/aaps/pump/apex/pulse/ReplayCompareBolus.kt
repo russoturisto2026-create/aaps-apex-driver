@@ -1,7 +1,7 @@
 package app.aaps.pump.apex.pulse
 
-import app.aaps.pump.apex.account.AapsWrite
-import app.aaps.pump.apex.account.time.ApexClock
+import app.aaps.pump.apex.aaps.AapsWrite
+import app.aaps.pump.apex.clock.ApexClock
 import app.aaps.pump.apex.protocol.ApexBolusRecord
 import app.aaps.pump.apex.protocol.ApexDailyRecord
 import java.util.Locale
@@ -127,7 +127,7 @@ object ReplayCompareBolus {
         }
         val extra = rows.filter { w -> !unplaced(run, w) && later.none { ApexClock.minuteStart(momentOf(it, file)) == ApexClock.minuteStart(w.timestampMs) } }
         report.line("  pass $name: new records after its first answer ${later.size} in ${byMinute.size} minutes; minutes where the rows differ from the records in number $wrongCount, in amount $wrongAmount; rows with no new record ${extra.size}; unplaced rows (stamped by the real clock) ${unplacedRows.size}")
-        extra.forEach { report.problem("pass $name: row ${ReplayTimeline.write(it)} has no new journal record") }
+        extra.forEach { report.problem("pass $name: row ${ReplayTimeline.write(it)} has no record of the journal read whole") }
         run.bolusRows.filter { unplaced(run, it.write) }.forEach { report.line("    unplaced at ${run.at(it.beat)}: ${ReplayTimeline.write(it.write)}") }
         val placed = rows - unplacedRows.toSet()
         val dup = placed.groupBy { it.pumpId }.filter { it.value.size > 1 }.keys + placed.groupBy { it.timestampMs to it.amountUnits }.filter { it.value.size > 1 }.flatMap { e -> e.value.map { it.pumpId } }

@@ -2,14 +2,13 @@ package app.aaps.pump.apex.state
 
 import app.aaps.core.interfaces.profile.Profile
 import app.aaps.pump.apex.ApexConst
-import app.aaps.pump.apex.account.time.ApexClock
+import app.aaps.pump.apex.clock.ApexClock
 import app.aaps.pump.apex.protocol.ApexProtocol
 import app.aaps.pump.apex.protocol.ApexSettings
 import app.aaps.pump.apex.protocol.ApexStatusV1
+import app.aaps.pump.apex.protocol.ApexStamp
 import app.aaps.pump.apex.protocol.ApexStatusV2
-import app.aaps.pump.apex.pulse.PictureSummary
 import app.aaps.pump.apex.protocol.ApexVersion
-import app.aaps.pump.apex.pulse.DayWindow
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.SingleIn
@@ -77,7 +76,6 @@ class ApexPumpState() {
                 value.reconciled     -> _reconcilePoint.value = ReconcilePoint(
                     atMs = ApexClock.minuteStart(value.heartbeatAtMs),
                     fromMs = value.dayFrom?.atMs,
-                    counterUnits = value.counterUnits - (value.dayFrom?.counterUnits ?: 0.0),
                     dayBolusUnits = value.dayBolusUnits?.let { it - (value.dayFrom?.bolusUnits ?: 0.0) },
                     dayBasalUnits = value.dayBasalUnits?.let { basal -> value.dayTbrUnits?.let { basal + it - (value.dayFrom?.basalUnits ?: 0.0) } }
                 )
@@ -101,19 +99,15 @@ class ApexPumpState() {
 
     @Volatile var serialNumber: String = ""
 
-    /** Firmware and protocol versions, null until read: shown on the screen, they name the pump for what was probed and tell whether the pump can have a password. */
+    /** Firmware and protocol versions, null until read: shown on the screen, the protocol tells whether the driver works with the pump and whether it has Status V2, see `ApexVersion`, and they tell whether the pump can have a password. */
     var version: ApexVersion?
         get() = _version.value
-        set(value) { _version.value = value }
+        set(value) {
+            // The form of the stamps is the pump's, for the whole link: set here, where the version comes.
+            value?.let { ApexStamp.digits = it.stampsInDigits }
+            _version.value = value
+        }
     val versionFlow: StateFlow<ApexVersion?> = _version.asStateFlow()
-
-    private val _diagnosis = MutableStateFlow<FirmwareDiagnosis?>(null)
-
-    /** What the probe at the last link setup found in the firmware, see [FirmwareDiagnosis]; null before the first probe. */
-    var diagnosis: FirmwareDiagnosis?
-        get() = _diagnosis.value
-        set(value) { _diagnosis.value = value }
-    val diagnosisFlow: StateFlow<FirmwareDiagnosis?> = _diagnosis.asStateFlow()
 
     /** Whether the pump can have a Bluetooth password to change: its protocol is known and is the password protocol or newer. */
     val canChangePassword: Boolean get() = version?.protocolAtLeast(ApexConst.PASSWORD_PROTOCOL_MAJOR, ApexConst.PASSWORD_PROTOCOL_MINOR) == true
@@ -131,8 +125,11 @@ class ApexPumpState() {
     val suspended: Boolean get() = statusCard?.status?.suspended ?: false
     val locked: Boolean get() = statusCard?.status?.locked ?: false
 
-    /** The pump takes no command: it is stopped, has an alarm, or is locked. */
-    val takesNoCommands: Boolean get() = suspended || activeAlarmCodes.isNotEmpty() || locked
+    /** The pump takes no command: it is stopped, has an alarm, is locked, or the driver does not work with it. */
+    val takesNoCommands: Boolean get() = suspended || activeAlarmCodes.isNotEmpty() || locked || unsupported
+
+    /** The pump's protocol is older than the driver works with, see [ApexVersion.supported]; false while the version is not known. */
+    val unsupported: Boolean get() = version?.let { !it.supported } ?: false
     val tbrActive: Boolean get() = statusCard?.tbrActive ?: false
     val tbrRate: Double get() = statusCard?.tbrRate ?: 0.0
     val activeAlarmCodes: List<Int> get() = statusCard?.status?.activeAlarmCodes ?: emptyList()
@@ -167,10 +164,10 @@ class ApexPumpState() {
     val dayWindow = DayWindow()
 
     /**
-     * The pump's count from [fromMs] to [atMs], U, and its parts, less what the pump had counted at
+     * The pump's bolus and basal from [fromMs] to [atMs], U, by its daily statistics, less what they held at
      * [fromMs], see [DayWindow]. A null [fromMs] is the phone's midnight.
      */
-    class ReconcilePoint(val atMs: Long, val fromMs: Long?, val counterUnits: Double, val dayBolusUnits: Double?, val dayBasalUnits: Double?)
+    class ReconcilePoint(val atMs: Long, val fromMs: Long?, val dayBolusUnits: Double?, val dayBasalUnits: Double?)
 
     /** Forget what was known of the pump: another pump, or this one paired afresh. */
     fun reset() {

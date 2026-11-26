@@ -1,9 +1,10 @@
 package app.aaps.pump.apex.command
 
+import app.aaps.pump.apex.protocol.ApexProtocol
 import kotlin.math.roundToLong
 
 /**
- * When a bolus of the ordered dose is over, by the delivery mechanics (page «Порции подачи Apex»). Our
+ * When a bolus of the ordered dose is over, by the delivery mechanics. Our
  * bolus runs as a state of the whole driver until its completion frame or its accepted cancel; when
  * neither comes, until this time from the pump's acceptance and [AFTER_END_MS] more, see
  * [ApexBolusDelivery]. Nothing is asked of the pump in it.
@@ -29,9 +30,9 @@ object BolusTiming {
 
     /** How many portions a bolus of [units] goes in: [MAX_PORTIONS] at most while the dose fits in them at 0.1 U. */
     fun portions(units: Double): Long = when {
-        units < 1.0 - HALF_STEP   -> (units / 0.025).roundToLong()
-        units <= 7.5 + HALF_STEP  -> (units / 0.05).roundToLong()
-        units <= 15.0 + HALF_STEP -> MAX_PORTIONS
+        units < 1.0 - ApexProtocol.HALF_STEP   -> (units / 0.025).roundToLong()
+        units <= 7.5 + ApexProtocol.HALF_STEP  -> (units / 0.05).roundToLong()
+        units <= 15.0 + ApexProtocol.HALF_STEP -> MAX_PORTIONS
         else                      -> (units / 0.1).roundToLong()
     }
 
@@ -43,5 +44,4 @@ object BolusTiming {
     private const val SLOW_FIRST_MS = 5_200L
     private const val SLOW_PORTION_MS = 5_000L
     private const val MAX_PORTIONS = 150L
-    private const val HALF_STEP = 0.0125
 }

@@ -4,7 +4,7 @@ import android.content.Context
 import app.aaps.pump.apex.store.ApexDao
 import app.aaps.pump.apex.store.ApexDatabase
 import app.aaps.pump.apex.store.ApexRoomStore
-import app.aaps.pump.apex.account.store.ApexStore
+import app.aaps.pump.apex.store.ApexStore
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.BindingContainer
 import dev.zacsweers.metro.ContributesTo

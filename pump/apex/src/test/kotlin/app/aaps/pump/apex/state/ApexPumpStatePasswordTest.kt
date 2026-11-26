@@ -1,12 +1,20 @@
 package app.aaps.pump.apex.state
 
 import app.aaps.pump.apex.ApexConst
+import app.aaps.pump.apex.protocol.ApexStamp
 import app.aaps.pump.apex.protocol.ApexVersion
 import com.google.common.truth.Truth.assertThat
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 
 /** A pump can have its Bluetooth password changed from the password protocol on. */
 class ApexPumpStatePasswordTest {
+
+    /** Setting a version sets the form of the stamps for the whole run; leave it plain for the next test. */
+    @AfterEach
+    fun plainStamps() {
+        ApexStamp.digits = false
+    }
 
     private val state = ApexPumpState()
 

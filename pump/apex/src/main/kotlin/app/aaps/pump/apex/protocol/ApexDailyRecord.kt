@@ -8,7 +8,7 @@ package app.aaps.pump.apex.protocol
  *
  * A day with no date is not a broken cell: the pump keeps days counted while its clock was unset,
  * and they come the same at every read, moving down the ring as days pass. A read made again tells
- * them from a broken cell, see `BrokenRecordDeep`.
+ * them from a broken cell, see `BrokenRecord`.
  */
 data class ApexDailyRecord(
     /** Position in the answer, 0 the newest day. */
@@ -73,6 +73,12 @@ data class ApexDailyRecord(
             val cut = newestFirst.getOrNull(at + 1) ?: return null
             return (at + 1).takeIf { !cut.hasDate && holdsKept(cut, kept) }
         }
+
+        /** Two frames carry the same day: its fields and date, whatever its position in the answer, its object byte and its CRC. */
+        fun sameDay(a: ByteArray, b: ByteArray): Boolean = identity(a).contentEquals(identity(b))
+
+        private fun identity(raw: ByteArray): ByteArray =
+            raw.copyOfRange(ApexResponseFrame.INDEX_OFFSET + 1, (raw.size - ApexResponseFrame.CRC_BYTES).coerceAtLeast(ApexResponseFrame.INDEX_OFFSET + 1))
 
         /** [day] holds at least what [kept] held in every field: the same day counted on. */
         fun holdsKept(day: ApexDailyRecord, kept: ApexDailyRecord): Boolean =

@@ -1,6 +1,5 @@
 package app.aaps.pump.apex.state
 
-import app.aaps.pump.apex.pulse.PictureSummary
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -10,10 +9,10 @@ class ApexPumpStateReconcileTest {
 
     private val state = ApexPumpState()
 
-    private fun picture(atMs: Long, counter: Double, reconciled: Boolean) = PictureSummary(
-        heartbeatAtMs = atMs, readAtMs = atMs + 3_000L, counterUnits = counter,
-        dayBolusUnits = 1.0, dayBasalUnits = 2.0, dayTbrUnits = 0.0,
-        topBolusAtMs = null, topBolusUnits = null, clockErrorMs = null, brokenJournals = emptyList(),
+    private fun picture(atMs: Long, basal: Double, reconciled: Boolean) = PictureSummary(
+        heartbeatAtMs = atMs,
+        dayBolusUnits = 1.0, dayBasalUnits = basal, dayTbrUnits = 0.0,
+        topBolusAtMs = null, topBolusUnits = null,
         reconciled = reconciled
     )
 
@@ -34,7 +33,7 @@ class ApexPumpStateReconcileTest {
         state.lastPicture = picture(60_000L, 3.0, reconciled = true)
         state.lastPicture = picture(360_000L, 3.9, reconciled = false)
         assertEquals(60_000L, state.reconcilePointFlow.value!!.atMs)
-        assertEquals(3.0, state.reconcilePointFlow.value!!.counterUnits, 1e-9)
+        assertEquals(3.0, state.reconcilePointFlow.value!!.dayBasalUnits!!, 1e-9)
         state.lastPicture = picture(660_000L, 8.0, reconciled = true)
         assertEquals(660_000L, state.reconcilePointFlow.value!!.atMs)
     }

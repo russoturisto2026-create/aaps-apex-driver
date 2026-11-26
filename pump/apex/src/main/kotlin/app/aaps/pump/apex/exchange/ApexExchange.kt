@@ -9,7 +9,7 @@ import app.aaps.core.interfaces.notifications.NotificationManager
 import app.aaps.core.interfaces.resources.ResourceHelper
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.apex.ApexConst
-import app.aaps.pump.apex.deep.HeartbeatOverAnswerDeep
+import app.aaps.pump.apex.protocol.HeartbeatOverAnswer
 import app.aaps.pump.apex.keys.ApexStringKey
 import app.aaps.pump.apex.link.ApexBLE
 import app.aaps.pump.apex.link.ApexConnection
@@ -20,8 +20,6 @@ import app.aaps.pump.apex.protocol.ApexResponseParser
 import app.aaps.pump.apex.trace.ApexTrace
 import app.aaps.pump.apex.trace.ApexTraceCat
 import app.aaps.pump.apex.R
-import app.aaps.pump.apex.deep.PumpDownDeep
-import app.aaps.pump.apex.deep.ReadAgainDeep
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -71,6 +69,9 @@ class ApexExchange(
      * True while an exchange holds the link or a bolus is being delivered: the pump takes no other
      * command then. Both clear in a `finally`, so the command queue cannot spin on a stuck flag.
      */
+    /** True while the link to the pump is up. */
+    val linked: Boolean get() = connection.isConnected
+
     val isBusy: Boolean get() = exchangeLock.isLocked || frameSink?.deliveryRunning == true
 
     private val parser = ApexResponseParser()
@@ -84,7 +85,7 @@ class ApexExchange(
     /** The frame that answered the exchange in progress, handed from the Bluetooth thread to the waiter. */
     private var pendingAnswer: ApexResponseFrame? = null
 
-    /** Whether the heartbeat came over the answer of the exchange that waits: the acknowledgement it hid is taken as given, see [HeartbeatOverAnswerDeep]. */
+    /** Whether the heartbeat came over the answer of the exchange that waits: the acknowledgement it hid is taken as given, see [HeartbeatOverAnswer]. */
     @Volatile private var heartbeatOverAnswer = false
 
     /**
@@ -114,7 +115,7 @@ class ApexExchange(
     private val exchangeLock = ReentrantLock()
 
     /** The pump taken as not working: no request goes to it until it comes back. */
-    private val pumpDown = PumpDownDeep(aapsLogger, trace, dropLink = { connection.drop(it) }) { down ->
+    private val pumpDown = PumpDown(aapsLogger, trace, dropLink = { connection.drop(it) }) { down ->
         if (down) notificationManager.post(NotificationId.PUMP_UNREACHABLE, rh.gs(R.string.apex_pump_no_answer), level = NotificationLevel.URGENT)
         else notificationManager.dismiss(NotificationId.PUMP_UNREACHABLE)
     }
@@ -131,7 +132,7 @@ class ApexExchange(
     /** The period of the heartbeat last set on the pump, milliseconds: the next heartbeat is waited for on it, see [keepClearOfHeartbeat]. */
     @Volatile var heartbeatPeriodMs = ApexConst.HEARTBEAT_PERIOD_DEFAULT * 60_000L
 
-    /** How far behind the phone the pump's clock is, by its last heartbeat, see [clockErrorOf]; null until one came after the last clock write. */
+    /** How far behind the phone the pump's clock is, by its last heartbeat, see [ExchangeTiming.clockErrorOf]; null until one came after the last clock write. */
     @Volatile var clockErrorMs: Long? = null
         private set
 
@@ -173,12 +174,12 @@ class ApexExchange(
     /**
      * One request until it is answered. The Bluetooth module of the pump now and then swallows an
      * answer, so a read is asked again when the pump is silent, when the answer fails its CRC, and
-     * when [valid] refuses the frame that came, see [askAgain] and `ReadAgainDeep`. A command is never
+     * when [valid] refuses the frame that came, see [askAgain] and `ReadAgain`. A command is never
      * sent twice: a second send would be a second order.
      *
-     * @param read true for a read of one object; bursts are read again by their callers, see `ReadAgainDeep.journal`
+     * @param read true for a read of one object; bursts are read again by their callers, see `ReadAgain.journal`
      * @param valid whether the single frame that answered a read can be used
-     * @param silenceDropsLink false for a probe of an object the pump may not have: its silence is not counted toward giving up the link, see [PumpDownDeep.noteReachability]
+     * @param silenceDropsLink false for a read the pump may leave unanswered at the link setup (the version): its silence is not counted toward giving up the link, see [PumpDown.noteReachability]
      */
     private fun runExchange(
         what: String,
@@ -243,7 +244,7 @@ class ApexExchange(
                     return Exchanged(false, null)
                 }
                 val seen = if (outcome == Ask.UNSOUND) " (${answer?.raw?.let { ApexFrame.hex(it) }})" else ""
-                aapsLogger.warn(LTag.PUMPCOMM, "Apex: ${outcome.text} $what$seen; asked again, ${asked + 1} of ${ReadAgainDeep.READS}")
+                aapsLogger.warn(LTag.PUMPCOMM, "Apex: ${outcome.text} $what$seen; asked again, ${asked + 1} of ${ReadRule.READS}")
                 trace.event(ApexTraceCat.EXCH, "asked_again", "what" to what, "why" to outcome.word)
                 abort()
                 keepRequestsApart()
@@ -278,10 +279,10 @@ class ApexExchange(
         )
     }
 
-    /** Three reads in a row brought nothing, [why]: the pump is taken as not working, see [PumpDownDeep]. */
+    /** Three reads in a row brought nothing, [why]: the pump is taken as not working, see [PumpDown]. */
     fun pumpNotWorking(why: String) = pumpDown.notWorking(why)
 
-    /** A heartbeat reconciled in full: the notice that the pump gives no usable answer goes, see [PumpDownDeep]. */
+    /** A heartbeat reconciled in full: the notice that the pump gives no usable answer goes, see [PumpDown]. */
     fun pumpReconciled() = pumpDown.onReconciled()
 
     /** Drop anything left over from a failed exchange. */
@@ -296,7 +297,7 @@ class ApexExchange(
     /**
      * A read of one object, asked again while the pump is silent, the answer fails its CRC, or
      * [valid] refuses it, see [runExchange].
-     * [silenceDropsLink] false for a probe, see [runExchange].
+     * [silenceDropsLink] false for a read the pump may leave unanswered, see [runExchange].
      *
      * @return the frame [valid] took; null when none did by the last ask: an answer that cannot be
      *   read is not handed on as if it were one
@@ -462,7 +463,7 @@ class ApexExchange(
     private fun keepClearOfHeartbeat() {
         val last = lastHeartbeatMs
         val now = SystemClock.elapsedRealtime()
-        val untilMs = heartbeatClearUntil(last, now, heartbeatPeriodMs) ?: return
+        val untilMs = ExchangeTiming.heartbeatClearUntil(last, now, heartbeatPeriodMs) ?: return
         trace.event(ApexTraceCat.EXCH, "heartbeat_wait", "ms" to untilMs - now)
         while (lastHeartbeatMs == last && SystemClock.elapsedRealtime() < untilMs) SystemClock.sleep(HEARTBEAT_POLL_MS)
     }
@@ -475,7 +476,7 @@ class ApexExchange(
 
     /** Hold the first request of a link back until the pump listens, see [ApexConst.FIRST_REQUEST_SETTLE_MS]; owed only by whoever talks first. */
     private fun settleAfterConnecting() {
-        val owed = settleDelayMs(apexBLE.linkUpAtMs, System.currentTimeMillis())
+        val owed = ExchangeTiming.settleDelayMs(apexBLE.linkUpAtMs, System.currentTimeMillis())
         if (owed <= 0L) return
         aapsLogger.debug(LTag.PUMPCOMM, "Apex: the link is ${owed}ms too young to be asked anything, waiting")
         trace.event(ApexTraceCat.EXCH, "settle", "ms" to owed)
@@ -520,7 +521,7 @@ class ApexExchange(
                 // The heartbeat answers nothing; it is told by its size and noted as the pump being there.
                 lastHeartbeatMs = SystemClock.elapsedRealtime()
                 pumpDown.onHeartbeat()
-                clockErrorMs = clockErrorOf(System.currentTimeMillis())
+                clockErrorMs = ExchangeTiming.clockErrorOf(System.currentTimeMillis())
                 apexBLE.noteHeartbeat()
                 trace.event(ApexTraceCat.BLE, "heartbeat", "period" to frame.objectType?.toInt())
             } else {
@@ -622,10 +623,10 @@ class ApexExchange(
     companion object {
 
         /**
-         * How an ask that did not end answered counts toward taking the pump as not working, see [PumpDownDeep]:
+         * How an ask that did not end answered counts toward taking the pump as not working, see [PumpDown]:
          * true when it still shows the pump is there (the heartbeat lay over the answer), false when nothing
          * usable came (no answer, or an answer that cannot be read), null when it does not count: the link was
-         * lost, or [silenceDropsLink] is false, a probe of an object the pump may not have.
+         * lost, or [silenceDropsLink] is false, a read the pump may leave unanswered.
          */
         internal fun usableAnswer(outcome: Ask, silenceDropsLink: Boolean): Boolean? = when {
             outcome == Ask.LINK_LOST -> null
@@ -636,52 +637,14 @@ class ApexExchange(
 
         /**
          * Whether a request is asked again after [asked] asks ended with [outcome], by the one rule of
-         * reading again, see [ReadAgainDeep]: only a [read] that brought nothing sound. A command is never
+         * reading again, see [ReadRule]: only a [read] that brought nothing sound. A command is never
          * sent twice, not even when its answer came broken: the pump may have carried it out.
          */
         internal fun askAgain(outcome: Ask, asked: Int, read: Boolean): Boolean =
-            read && ReadAgainDeep.asksAgain(outcome == Ask.SILENT || outcome == Ask.BROKEN || outcome == Ask.UNSOUND || outcome == Ask.UNDER_HEARTBEAT, asked)
-
-        /**
-         * How far behind the phone the pump's clock is, milliseconds, by a heartbeat heard at [heardAtMs]:
-         * the heartbeat comes on second 0 of the pump's clock, [ApexConst.HEARTBEAT_LATENCY_MS] before it
-         * is heard. Negative when the pump's clock is ahead. Within half a minute either way.
-         */
-        fun clockErrorOf(heardAtMs: Long): Long {
-            val intoMinute = Math.floorMod(heardAtMs - ApexConst.HEARTBEAT_LATENCY_MS, 60_000L)
-            return if (intoMinute < 30_000L) intoMinute else intoMinute - 60_000L
-        }
+            read && ReadRule.asksAgain(outcome == Ask.SILENT || outcome == Ask.BROKEN || outcome == Ask.UNSOUND || outcome == Ask.UNDER_HEARTBEAT, asked)
 
         /** How often a request held for the heartbeat looks whether it came. */
         private const val HEARTBEAT_POLL_MS = 50L
-
-        /**
-         * Until when a request now must wait for the heartbeat, or null when it is not near. The pump
-         * beats on its own clock, one period after another to within a second a day: the next one is
-         * due a whole number of periods after [lastMs], and one that did not come keeps the beat.
-         *
-         * @param lastMs when the last heartbeat came, 0 when none came since the link or the clock write
-         * @param periodMs the period of the heartbeat last set on the pump
-         */
-        fun heartbeatClearUntil(lastMs: Long, nowMs: Long, periodMs: Long): Long? {
-            if (lastMs == 0L) return null
-            var dueMs = lastMs + periodMs
-            while (dueMs + ApexConst.HEARTBEAT_CLEAR_AFTER_MS < nowMs) dueMs += periodMs
-            return if (nowMs < dueMs - ApexConst.HEARTBEAT_CLEAR_BEFORE_MS) null else dueMs + ApexConst.HEARTBEAT_CLEAR_AFTER_MS
-        }
-
-        /**
-         * How much of the settle window is still owed, milliseconds, never more than the window itself
-         * (a corrected phone clock can put the link's start in the future). Apart from the sleep so a
-         * test can check it.
-         *
-         * @param linkUpAtMs when the link came up, 0 when there is none
-         */
-        fun settleDelayMs(linkUpAtMs: Long, now: Long): Long {
-            if (linkUpAtMs == 0L) return 0L
-            return (ApexConst.FIRST_REQUEST_SETTLE_MS - (now - linkUpAtMs))
-                .coerceIn(0L, ApexConst.FIRST_REQUEST_SETTLE_MS)
-        }
 
         /** How often to look at a burst that is still arriving, milliseconds. */
         private const val BURST_POLL_MS = 100L

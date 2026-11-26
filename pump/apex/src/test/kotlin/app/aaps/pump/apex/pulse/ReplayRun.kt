@@ -1,7 +1,7 @@
 package app.aaps.pump.apex.pulse
 
-import app.aaps.pump.apex.account.AapsWrite
-import app.aaps.pump.apex.account.NoticeKind
+import app.aaps.pump.apex.aaps.AapsWrite
+import app.aaps.pump.apex.aaps.NoticeKind
 
 /** A finished replay with the views the checks share. */
 class ReplayRun(

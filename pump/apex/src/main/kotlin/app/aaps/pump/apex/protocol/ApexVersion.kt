@@ -18,6 +18,21 @@ data class ApexVersion(
     fun protocolAtLeast(major: Int, minor: Int): Boolean =
         protocolMajor > major || (protocolMajor == major && protocolMinor >= minor)
 
+    /**
+     * True when the driver works with this pump: protocol 4.10 or newer. From it on the pump gives the
+     * daily statistics and the temporary basal marks, and the account rests on them.
+     */
+    val supported: Boolean get() = protocolAtLeast(4, 10)
+
+    /**
+     * True when the pump answers Status V2 (0x0C): protocol 4.11 or newer. A 4.10 pump never answers it,
+     * so it is not asked; its battery comes from Status V1, in quarters.
+     */
+    val hasStatusV2: Boolean get() = protocolAtLeast(4, 11)
+
+    /** True when the pump writes the stamps of its records as decimal digits: protocol 4.10. A newer one writes them plain. See [ApexStamp]. */
+    val stampsInDigits: Boolean get() = !protocolAtLeast(4, 11)
+
     internal object Offset {
 
         const val UNKNOWN = 2

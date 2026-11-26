@@ -7,21 +7,22 @@ import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.core.keys.LongNonKey
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.apex.ApexConst
-import app.aaps.pump.apex.ApexLimits
-import app.aaps.pump.apex.ApexPumpClock
-import app.aaps.pump.apex.account.AapsCarrier
-import app.aaps.pump.apex.account.AapsToday
-import app.aaps.pump.apex.account.AapsWrite
-import app.aaps.pump.apex.account.basal.BasalPeriodKeeper
-import app.aaps.pump.apex.account.basal.ExactBasalMode
-import app.aaps.pump.apex.account.basal.PeriodBoluses
-import app.aaps.pump.apex.account.bolus.BolusJournal
-import app.aaps.pump.apex.account.store.ClockOffset
-import app.aaps.pump.apex.account.store.FakeStore
-import app.aaps.pump.apex.account.tbr.TbrJournal
+import app.aaps.pump.apex.aaps.ApexLimits
+import app.aaps.pump.apex.basal.TbrFacts
+import app.aaps.pump.apex.basal.TbrFactsReader
+import app.aaps.pump.apex.clock.ApexClock
+import app.aaps.pump.apex.clock.ApexPumpClock
+import app.aaps.pump.apex.aaps.AapsCarrier
+import app.aaps.pump.apex.aaps.AapsToday
+import app.aaps.pump.apex.aaps.AapsWrite
+import app.aaps.pump.apex.basal.BasalPeriodKeeper
+import app.aaps.pump.apex.basal.ExactBasalMode
+import app.aaps.pump.apex.bolus.BolusReconciliation
+import app.aaps.pump.apex.store.ClockOffset
+import app.aaps.pump.apex.store.FakeStore
+import app.aaps.pump.apex.basal.TbrReconciliation
 import app.aaps.pump.apex.command.ApexBolusDelivery
-import app.aaps.pump.apex.command.TbrCommand
-import app.aaps.pump.apex.deep.RunningBolusDeep
+import app.aaps.pump.apex.basal.TbrCommand
 import app.aaps.pump.apex.keys.ApexStringKey
 import app.aaps.pump.apex.manager.ApexManager
 import app.aaps.pump.apex.protocol.ApexBolusRecord
@@ -37,11 +38,10 @@ import app.aaps.pump.apex.protocol.ApexSettings
 import app.aaps.pump.apex.protocol.ApexStatusV1
 import app.aaps.pump.apex.protocol.ApexStatusV2
 import app.aaps.pump.apex.protocol.ApexTbrStatus
+import app.aaps.pump.apex.protocol.ApexStamp
 import app.aaps.pump.apex.protocol.ApexVersion
-import app.aaps.pump.apex.state.ApexAbilities
 import app.aaps.pump.apex.state.ApexPumpState
 import app.aaps.pump.apex.trace.ApexTrace
-import app.aaps.shared.tests.AAPSLoggerTest
 import kotlinx.coroutines.runBlocking
 import org.mockito.Mockito.mockingDetails
 import org.mockito.invocation.Invocation
@@ -71,20 +71,19 @@ class BeatResult(
     /** The calls the basal keeper made on the sync layer: method name and the numbers it gave. */
     val syncCalls: List<String>,
     /** The temporary basal row the driver holds open after this heartbeat, as text; null when none. */
-    val openAfter: String?,
-    /** The boluses the basal period under way held before this heartbeat, U. */
-    val periodBolusesBefore: Double
+    val openAfter: String?
 )
 
 /**
  * The real heartbeat code over a pump that answers from a recorded exchange. The manager is the only
  * mock that matters: it hands back what the record holds for the heartbeat being fed, and nothing
- * where the record holds nothing. The store is in memory. A pump with none of the optional objects.
+ * where the record holds nothing. The store is in memory. A pump of protocol 4.[protocolMinor]:
+ * from 4.11 it has Status V2, a 4.10 pump has not.
  */
 class ReplayRig(
     private val file: ReplayFile,
     mode: ExactBasalMode,
-    abilities: ApexAbilities = ApexAbilities(lastTbrCommand = false, finishedTbr = false, dayRecord = false, statusV2 = false),
+    protocolMinor: Int = 11,
     /** Where the answers come from; without it only Status V1 and the bolus journal of the beat itself are answered. */
     private val source: ReplaySource? = null,
     /** Called after each heartbeat has been fed, with its index; the clock writes of the record are made here. */
@@ -110,8 +109,9 @@ class ReplayRig(
 
     init {
         pumpState.serialNumber = serial
-        pumpState.version = ApexVersion(firmware.split('.').map { it.toInt() }, 1, 0, listOf(0, 0))
-        ApexAbilities.store(AAPSLoggerTest(), store, serial, firmware, abilities)
+        pumpState.version = ApexVersion(firmware.split('.').map { it.toInt() }, 4, protocolMinor, listOf(0, 0))
+        // The record is of a pump that writes its stamps plain; the pass of 4.10 takes away only Status V2.
+        ApexStamp.digits = false
         store.saveClock(serial, ClockOffset(offsetMs = 0L, writtenAtMs = 0L, reason = "replay"), 0L)
 
         val preferences: Preferences = mock()
@@ -135,20 +135,22 @@ class ReplayRig(
         // The bolus journal and the basal period are told the basal the replay's rows and the status rates order.
         val orderedToday: AapsToday = mock()
         runBlocking { whenever(orderedToday.basalBetween(any(), any())).thenAnswer { ordered.between(it.getArgument(0), it.getArgument(1)) } }
-        val reader = PictureReader(log, manager, store, pumpState, TbrFactsReader(log, manager, store, pumpState), trace)
         // The record has one status per heartbeat: the reads of the check whether a bolus runs get it again, with no pause.
-        val runningBolus = RunningBolusDeep(log, manager, mock<ApexBolusDelivery>(), trace).apply { pause = {} }
-        val keeper = BasalPeriodKeeper(log, preferences, store, pumpSync, persistence, mock<ProfileFunction>(), orderedToday, carrier, trace)
+        val runningBolus = RunningBolus(log, manager, mock<ApexBolusDelivery>(), trace).apply { pause = {} }
+        val keeper = BasalPeriodKeeper(log, preferences, store, pumpSync, persistence, mock<ProfileFunction>(), orderedToday, trace)
+        val reader = PictureReader(log, manager, store, pumpState, TbrFactsReader(log, manager), keeper, trace)
         val pumpClock: ApexPumpClock = mock {
             on { phoneOffsetMs() } doReturn 0L
+            // The offset the clock was written in last, as the real one gives it.
+            on { offsetMs(any()) } doAnswer { ApexClock.offsetMs(store, it.getArgument(0), 0L) }
         }
         val reconciliation = Reconciliation(
-            log, store, reader, BolusJournal(log, store, manager, reader, carrier, orderedToday, preferences, pumpState, trace), TbrJournal(log, store, carrier, trace),
-            keeper, runningBolus, trace
+            log, store, BolusReconciliation(log, store, manager, reader, carrier, orderedToday, preferences, pumpState, trace), TbrReconciliation(log, store, carrier, trace),
+            keeper, runningBolus, carrier, preferences, trace
         )
         tick = HeartbeatTick(
-            log, mock<RxBus>(), reader, HeartbeatGrid(log, manager, trace), manager, store, pumpState, pumpClock, reconciliation,
-            mock<TbrCommand>(), mock<ApexLimits>(), trace
+            log, reader, HeartbeatGrid(log, manager, trace), manager, pumpState, pumpClock, reconciliation,
+            mock<TbrCommand>(), mock<ApexLimits>(), PictureReport(log, mock<RxBus>(), store, pumpState, pumpClock, trace), CodeFault(log, mock(), mock()), StartTries(log, mock(), mock())
         )
     }
 
@@ -220,7 +222,6 @@ class ReplayRig(
         val traceFrom = invocations(trace, "event").size
         val periodFrom = invocations(manager, "setHeartbeatPeriod").size
         val syncFrom = mockingDetails(pumpSync).invocations.size
-        val heldBefore = PeriodBoluses(store, serial).sum()
         var ran: Boolean? = null
         var error: Throwable? = null
         try {
@@ -235,7 +236,7 @@ class ReplayRig(
             statusReads, journalReads,
             invocations(manager, "setHeartbeatPeriod").drop(periodFrom).map { it.arguments[0] as Int },
             mockingDetails(pumpSync).invocations.drop(syncFrom).map { syncText(it) },
-            TbrJournal.lastOf(store, serial)?.status?.let { TbrFacts.runningOf(it)?.text }, heldBefore
+            TbrReconciliation.lastOf(store, serial)?.status?.let { TbrFacts.runningOf(it)?.text }
         )
         ordered.note(result.writes)
         afterBeat(index)

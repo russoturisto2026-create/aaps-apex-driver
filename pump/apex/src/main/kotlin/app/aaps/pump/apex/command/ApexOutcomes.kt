@@ -17,12 +17,14 @@ sealed interface ApexBolusOutcome {
      *
      * [reportedUnits] is from the completion frame when it came, else from the last progress frame.
      * [cancelled]: the pump accepted the user's cancel. [completed]: the pump closed it with its completion
-     * frame.
+     * frame. [frames]: the progress frames seen. [cancelPressed]: the user asked to stop it.
      */
     data class Delivered(
         val reportedUnits: Double,
         val cancelled: Boolean = false,
-        val completed: Boolean = false
+        val completed: Boolean = false,
+        val frames: Int = 0,
+        val cancelPressed: Boolean = false
     ) : ApexBolusOutcome
 }
 

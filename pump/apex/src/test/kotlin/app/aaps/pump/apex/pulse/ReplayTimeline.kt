@@ -1,6 +1,6 @@
 package app.aaps.pump.apex.pulse
 
-import app.aaps.pump.apex.account.AapsWrite
+import app.aaps.pump.apex.aaps.AapsWrite
 import java.util.Calendar
 import java.util.TimeZone
 
@@ -14,10 +14,13 @@ object ReplayTimeline {
     }
 
     fun write(w: AapsWrite): String = when (w) {
-        is AapsWrite.Bolus   -> "BOLUS id=${w.pumpId} at=${clock(w.timestampMs)} ${w.amountUnits} U ${w.type}"
+        is AapsWrite.EarlyBolus -> "BOLUS ORDER temp=${w.tempId} at=${clock(w.timestampMs)} ${w.amountUnits} U ${w.type}"
+        is AapsWrite.Bolus   -> "BOLUS id=${w.pumpId} temp=${w.tempId} at=${clock(w.timestampMs)} ${w.amountUnits} U ${w.type}"
         is AapsWrite.Tbr     -> "TBR id=${w.pumpId} start=${clock(w.startMs)} ${w.rate}${if (w.isAbsolute) " U/h" else " %"} for ${w.durationMs / 60_000.0} min ${w.type}"
         is AapsWrite.StopTbr -> "STOP end=${clock(w.endMs)} id=${w.endMs}"
         is AapsWrite.Notice  -> "NOTICE ${w.kind} units=${w.units} at=${clock(w.atMs)}"
+        is AapsWrite.Refill  -> "REFILL at=${clock(w.atMs)} ${w.fromUnits} U to ${w.toUnits} U"
+        AapsWrite.OpenLoop   -> "LOOP OPENED"
     }
 
     /** The whole run, every heartbeat with its writes, logs of warn level and above, and traced events. */
