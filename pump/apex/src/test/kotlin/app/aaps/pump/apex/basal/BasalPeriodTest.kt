@@ -56,11 +56,26 @@ class BasalPeriodTest {
     }
 
     @Test
-    fun `across the pump's midnight the old day is found below the new one and each day counts whole`() {
+    fun `across the pump's midnight the period closes by the old day and the next begins from nothing in the new one`() {
         val start = BasalPeriod.Mark(tenOhFive, day(400, 20, key = yesterday))
-        // The new day from nothing on top, the old day closed at 410 + 30 below it.
+        // The old day closed at 410 + 30 below the new one; the new day got 6 steps before the statistics were read.
         val close = step(start, tenOhFive + 25 * minute, day(6, 0, bolusRaw = 0), day(410, 30, key = yesterday))
-        assertEquals(BasalPeriod.Step.Close((10 + 10 + 6) * 0.025), close)
+        assertEquals(BasalPeriod.Step.Close((10 + 10) * 0.025, ApexDailyRecord(0, 0.0, 0.0, 0.0, today)), close)
+        // The next heartbeat counts the new day whole.
+        val next = BasalPeriod.Mark(tenOhFive + 25 * minute, (close as BasalPeriod.Step.Close).next!!)
+        assertEquals(BasalPeriod.Step.Close(11 * 0.025), step(next, tenOhFive + 30 * minute, day(5, 6, bolusRaw = 0), day(410, 30, key = yesterday)))
+    }
+
+    @Test
+    fun `the heartbeat at midnight - a portion of the new day read after the mark goes to the new period`() {
+        // 27.11 23:55: 4.65 U of temporary basal; the pump closes its day at 4.9, and one portion of 0.025 falls after midnight.
+        val start = BasalPeriod.Mark(tenOhFive, day(129, 186, key = yesterday))
+        val atMidnight = step(start, tenOhFive + 5 * minute, day(0, 1, bolusRaw = 0), day(129, 196, key = yesterday)) as BasalPeriod.Step.Close
+        assertEquals(10 * 0.025, atMidnight.units, 1e-9)
+        val next = BasalPeriod.Mark(tenOhFive + 5 * minute, atMidnight.next!!)
+        val atFive = step(next, tenOhFive + 10 * minute, day(0, 5, bolusRaw = 0), day(129, 196, key = yesterday)) as BasalPeriod.Step.Close
+        assertEquals(5 * 0.025, atFive.units, 1e-9)
+        assertEquals(null, atFive.next)
     }
 
     @Test

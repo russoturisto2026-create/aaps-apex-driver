@@ -27,7 +27,7 @@ class PumpPicture(
     val boluses: JournalRead<ApexBolusRecord>?,
     /** Why the bolus journal was read, or was not. */
     val bolusGate: BolusGate.Decision,
-    /** The daily statistics: read after the bolus journal when that was read, see [PictureReader]. */
+    /** The daily statistics, read once, right after the status, see [PictureReader]. */
     val days: JournalRead<ApexDailyRecord>,
     /** The temporary basal facts; null when the status showed what was expected and they were not read, see [tbrGate]. */
     val tbr: TbrFacts?,

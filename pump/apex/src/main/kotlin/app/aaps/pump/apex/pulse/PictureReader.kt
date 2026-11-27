@@ -32,11 +32,10 @@ import dev.zacsweers.metro.SingleIn
  * next, by [TbrGate] and [TbrFactsReader]: the status is held against the status of the last
  * reconciliation, and the last finished temporary basal is read when they differ, or neither shows
  * one running. With the exact basal record on, they are not read at a heartbeat that closes its period,
- * see [BasalPeriodKeeper.closesAt]: the statistics are the row then. The bolus journal comes last, by [BolusGate]. When it is read,
- * the daily statistics are read once more after it: the bolus records are held against the field
- * read after them, so that a bolus that came between the two reads is in the field and not
- * missing from it, see `BolusReconciliation`. The exchange keeps the pause between requests, see
- * `ApexConst.REQUEST_GAP_MS`.
+ * see [BasalPeriodKeeper.closesAt]: the statistics are the row then. The bolus journal comes last, by [BolusGate].
+ * The statistics are read once: no bolus runs at a reconciled heartbeat, the two reads of the status
+ * show it, see `RunningBolus`, so no bolus ends between the statistics and the journal. The exchange
+ * keeps the pause between requests, see `ApexConst.REQUEST_GAP_MS`.
  *
  * Every object is asked again while the pump is silent or its answer is not sound, by one rule, see
  * [ReadAgain]. A pump that still does
@@ -80,8 +79,7 @@ class PictureReader(
             "bolus" to bolusGate.bolusMovedUnits, "basal" to bolusGate.basalMovedUnits, "tbr" to bolusGate.tbrMovedUnits, "gap" to bolusGate.sumGapUnits
         )
         val boluses = if (bolusGate.read) readBolusJournal("bolus journal", manager::readBolusHistory, serial) ?: return null else null
-        val days = if (boluses == null) part.days else readJournal("daily statistics after the bolus journal", manager::readDailyStats, daysBroken(serial, readAll)) ?: return null
-        return part.picture(boluses, bolusGate, days, start = readAll == ReadAll.START)
+        return part.picture(boluses, bolusGate, start = readAll == ReadAll.START)
     }
 
     /** The objects of the picture before the bolus journal: everything but the bolus part. */
@@ -90,9 +88,8 @@ class PictureReader(
         val days: JournalRead<ApexDailyRecord>, val tbr: TbrFacts?, val tbrGate: TbrGate.Decision
     ) {
 
-        /** [daysAfter]: the daily statistics read after the bolus journal when it was read, else [days]. */
-        fun picture(boluses: JournalRead<ApexBolusRecord>?, bolusGate: BolusGate.Decision, daysAfter: JournalRead<ApexDailyRecord>, start: Boolean) =
-            PumpPicture(heartbeatAtMs, status, boluses, bolusGate, daysAfter, tbr, tbrGate, System.currentTimeMillis(), start)
+        fun picture(boluses: JournalRead<ApexBolusRecord>?, bolusGate: BolusGate.Decision, start: Boolean) =
+            PumpPicture(heartbeatAtMs, status, boluses, bolusGate, days, tbr, tbrGate, System.currentTimeMillis(), start)
     }
 
     /** How today's day of [days] moved since the day kept, see `TbrGate`. */

@@ -37,7 +37,8 @@ object BrokenRecord {
     /**
      * The days of a statistics answer that hint at a flicker, held against [kept], the frames of the copy, newest
      * first; empty when none does. The new days and the day kept last flicker when they have no month or no
-     * day, the date 01.01.01 the field holds before a date is written, or nothing in any of the three fields.
+     * day, the date 01.01.01 the field holds before a date is written, or nothing in any of the three fields;
+     * a new date above the day kept last may hold nothing: a day the pump just opened, at its midnight.
      * The day kept last gone on with its date lost, the pump's power lost today, is not one; nor is the day kept last
      * read again the same as in the copy: the same as before, it does not flicker. [closedToo], the
      * start: a closed day not the same as in the copy flickers too. With nothing kept, or the day kept last not
@@ -47,19 +48,22 @@ object BrokenRecord {
         val top = kept.firstOrNull()?.let { ApexDailyRecord.decode(ApexResponseFrame(it)) }
         val at = top?.let { ApexDailyRecord.indexOfKept(answer.entries.map { e -> e.record }, it) }
         val fresh = if (at == null) answer.entries else answer.entries.take(at + 1)
-        val hinted = fresh.filterIndexed { i, e -> !(i == at && (!e.record.hasDate || ApexDailyRecord.sameDay(e.frame.raw, kept.first()))) && dayFlickers(e) }
+        val hinted = fresh.filterIndexed { i, e ->
+            val opened = top != null && at != null && i < at && e.record.hasDate && e.record.dayClockSeconds > top.dayClockSeconds
+            !(i == at && (!e.record.hasDate || ApexDailyRecord.sameDay(e.frame.raw, kept.first()))) && dayFlickers(e, emptyIsSound = opened)
+        }
         if (at == null || !closedToo) return hinted
         val closed = answer.entries.drop(at + 1).filterIndexed { k, e -> kept.getOrNull(k + 1)?.let { !ApexDailyRecord.sameDay(e.frame.raw, it) } ?: false }
         return hinted + closed
     }
 
     /**
-     * A day of nothing at all is a hint too: a day read while the pump writes it may come so. A real day of
-     * nothing, as right after midnight, comes the same at every read and is taken then, see [ReadAgain].
+     * A day of nothing at all is a hint too: a day read while the pump writes it may come so; but not
+     * [emptyIsSound], a new date the pump just opened, which holds nothing by its nature.
      */
-    private fun dayFlickers(day: ApexRead<ApexDailyRecord>): Boolean =
+    private fun dayFlickers(day: ApexRead<ApexDailyRecord>, emptyIsSound: Boolean = false): Boolean =
         stampHasNoDate(day.frame, ApexDailyRecord.Offset.DATE) || dateNotWritten(day.frame, ApexDailyRecord.Offset.DATE) ||
-            day.record.bolusUnits == 0.0 && day.record.basalUnits == 0.0 && day.record.tbrUnits == 0.0
+            !emptyIsSound && day.record.bolusUnits == 0.0 && day.record.basalUnits == 0.0 && day.record.tbrUnits == 0.0
 
     /** The date at [dataOffset] is 01.01.01: what the field holds before a date is written. */
     private fun dateNotWritten(frame: ApexResponseFrame, dataOffset: Int): Boolean =

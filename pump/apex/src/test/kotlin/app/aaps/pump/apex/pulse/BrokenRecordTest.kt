@@ -46,4 +46,14 @@ class BrokenRecordTest {
         val c = answerOf(withCrc("AA 12 17 A3 06 00 29 00 7E 02 1F 00 1A 09 02 00"), ApexDailyRecord::decode)
         assertFalse(BrokenRecord.sameAnswer(a, c))
     }
+
+    @Test
+    fun `a new day the pump just opened holds nothing and is not broken, a day of nothing with no day kept is`() {
+        // The answer of 28.11 00:00:05: the new day 28.11 of nothing on top of 27.11.
+        val opened = ApexResponseParser().feed(hexToBytes("AA 12 64 A3 26 00 00 00 00 00 00 00 1A 0B 1C 00 C5 49")).single()
+        val old = ApexResponseParser().feed(hexToBytes(withCrc("AA 12 17 A3 06 00 28 00 7E 02 1F 00 1A 0B 1B 00"))).single()
+        val answer = ApexJournalAnswer(listOf(ApexRead(opened, ApexDailyRecord.decode(opened)!!), ApexRead(old, ApexDailyRecord.decode(old)!!)), 2)
+        assertTrue(BrokenRecord.brokenDay(answer, listOf(old.raw), closedToo = false).isEmpty())
+        assertEquals(listOf(opened), BrokenRecord.brokenDay(answer, emptyList(), closedToo = false).map { it.frame })
+    }
 }

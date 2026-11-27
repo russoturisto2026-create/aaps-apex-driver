@@ -46,10 +46,14 @@ class DayFlickerTest {
     }
 
     @Test
-    fun `today with no day, with the date not written, or with nothing in its fields - a hint each`() {
+    fun `today with no day or with the date not written - a hint each`() {
         assertEquals(listOf(0), hinted(answer(Day(44, 410, 0, day = 0), Day(80, 1248, 0, day = 29)), kept))
         assertEquals(listOf(0), hinted(answer(Day(44, 410, 0, 1, 1, 1), Day(80, 1248, 0, day = 29)), kept))
-        assertEquals(listOf(0), hinted(answer(Day(0, 0, 0, day = 31), Day(40, 410, 0, day = 30)), kept))
+    }
+
+    @Test
+    fun `a new day of nothing above the day kept is the pump's midnight - not a hint`() {
+        assertEquals(emptyList<Int>(), hinted(answer(Day(0, 0, 0, day = 31), Day(40, 410, 0, day = 30)), kept))
     }
 
     @Test

@@ -10,6 +10,7 @@ import app.aaps.core.interfaces.pump.PumpRate
 import app.aaps.core.interfaces.pump.PumpSync
 import app.aaps.core.keys.interfaces.Preferences
 import app.aaps.pump.apex.aaps.AapsToday
+import app.aaps.pump.apex.protocol.ApexDailyRecord
 import app.aaps.pump.apex.statistics.Delivered
 import app.aaps.pump.apex.store.ApexStore
 import app.aaps.pump.apex.clock.ApexClock
@@ -87,7 +88,7 @@ class BasalPeriodKeeper(
             is BasalPeriod.Step.Close    -> {
                 val ordered = runBlocking { aapsToday.basalBetween(start.atMs, atMs) }
                 write(serial, start.atMs, atMs, step.units, ordered, picture)
-                begin(serial, atMs, now, "closed")
+                begin(serial, atMs, now, "closed", step.next)
             }
         }
     }
@@ -98,15 +99,15 @@ class BasalPeriodKeeper(
         trace.event(ApexTraceCat.STATE, "basal_period", "state" to "postponed", "why" to why, "from" to fromMs)
     }
 
-    /** The period begins at this heartbeat; the one before it, when it was not closed, leaves its rows as ordered. */
-    private fun begin(serial: String, atMs: Long, now: Delivered, why: String) {
-        val today = now.days.firstOrNull()
+    /** The period begins at this heartbeat, from [from] or else today's day of [now]; the one before it, when it was not closed, leaves its rows as ordered. */
+    private fun begin(serial: String, atMs: Long, now: Delivered, why: String, from: ApexDailyRecord? = null) {
+        val today = from ?: now.days.firstOrNull()
         if (today == null) {
             aapsLogger.warn(LTag.PUMP, "Apex: no basal period begins at $atMs, the daily statistics came with no day")
             return
         }
         store.putState(serial, STATE_PERIOD, BasalPeriod.Mark(atMs, today).encode())
-        if (why != "closed") aapsLogger.info(LTag.PUMP, "Apex: a basal period begins at $atMs, $why; day basal ${today.basalUnits} temporary ${today.tbrUnits} U")
+        if (why != "closed" || from != null) aapsLogger.info(LTag.PUMP, "Apex: a basal period begins at $atMs, $why; day basal ${today.basalUnits} temporary ${today.tbrUnits} U")
         trace.event(ApexTraceCat.STATE, "basal_period", "state" to "begun", "why" to why, "at" to atMs, "basal" to today.basalUnits, "tbr" to today.tbrUnits)
     }
 

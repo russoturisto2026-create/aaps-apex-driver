@@ -1,3 +1,24 @@
+# Changes: v4 from 2026.11.27.3 to 2026.11.28.3
+
+## Basal at the pump's midnight
+
+- **The basal period closes by the old day.** The statistics are read a few seconds after the
+  heartbeat mark. A portion given in those seconds after midnight is already in the pump's new
+  day. Before, the period that ended at midnight took it, so AAPS held it in the old day and the
+  pump in the new one. Now the period closes by the records of the old days only, and the next
+  one begins from nothing in the new day.
+- **A new day of nothing is not a broken record.** A day the pump just opened holds nothing by
+  its nature. It is no longer read again: the second read let a portion given after midnight
+  into the heartbeat.
+- **The screen takes the new day as nothing at the heartbeat of midnight.** From 00:00 to 00:05
+  it no longer shows a gap of one portion.
+
+## Daily statistics
+
+- **The statistics are read once at a heartbeat.** Before, they were read once more after the
+  bolus journal. No bolus runs at a reconciled heartbeat, so the second read only let basal
+  portions given after the mark into the heartbeat.
+
 # Changes: v4 from 2026.11.27.2 to 2026.11.27.3
 
 ## Start
@@ -209,6 +230,27 @@ The branch `main` holds the v4 driver.
 - While extended boluses are allowed on the pump, the driver takes no command.
 
 ---
+
+# Изменения: v4 с 2026.11.27.3 до 2026.11.28.3
+
+## Базал на полуночи помпы
+
+- **Период базала закрывается по старому дню.** Статистика читается через несколько секунд после
+  отметки пульса. Порция, поданная в эти секунды после полуночи, у помпы уже в новом дне. Раньше
+  её забирал период, который кончился в полночь, и в AAPS она стояла в старом дне, а у помпы — в
+  новом. Теперь период закрывается только по записям старых дней, а следующий начинается с нуля
+  в новом дне.
+- **Новый пустой день — не сбойная запись.** День, который помпа только что открыла, пуст по
+  своей природе. Он больше не перечитывается: повторное чтение пускало в пульс порцию, поданную
+  после полуночи.
+- **Экран на пульсе полуночи считает новый день пустым.** С 00:00 до 00:05 он больше не
+  показывает разницу в одну порцию.
+
+## Суточная статистика
+
+- **Статистика читается на пульсе один раз.** Раньше она читалась ещё раз после журнала болюсов.
+  На сверенном пульсе болюс не идёт, так что второе чтение только пускало в пульс порции базала,
+  поданные после отметки.
 
 # Изменения: v4 с 2026.11.27.2 до 2026.11.27.3
 

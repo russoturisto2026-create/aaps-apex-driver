@@ -16,8 +16,10 @@ import app.aaps.pump.apex.protocol.ApexProtocol
  *   is the move of the two fields since the heartbeat it began at, in whole steps of the pump;
  * - boluses first: the bolus journal is settled before the period is closed, so that a bolus row and
  *   the basal row of the same span come from the same picture;
- * - across the pump's midnight the day the period began in is found again below the new one, and
- *   each day after it counts whole, as the bolus gate does it;
+ * - across the pump's midnight the day the period began in is found again below the new one: the
+ *   period closes by the records of the old days, and the next one begins from nothing in the new
+ *   day. What the new day holds went in after the pump's midnight, though the statistics are read
+ *   a few seconds after the mark; so the days of AAPS and of the pump hold the same basal;
  * - when the pump's numbers cannot be held against the mark, the period waits or begins anew, see [step].
  *
  * Arithmetic only; the keeper holds the period in the store and writes the rows.
@@ -53,8 +55,11 @@ object BasalPeriod {
         /** Not the heartbeat the period ends at. */
         data object Wait : Step
 
-        /** The period ends at this heartbeat: [units] of basal went in over it, in whole steps of the pump. */
-        data class Close(val units: Double) : Step
+        /**
+         * The period ends at this heartbeat: [units] of basal went in over it, in whole steps of the pump.
+         * [next]: the pump's midnight was in the period, the next one begins from this day, empty; else null.
+         */
+        data class Close(val units: Double, val next: ApexDailyRecord? = null) : Step
 
         /** The heartbeat the period ends at, but it cannot be closed yet; the next heartbeat asks again. */
         data class Postpone(val why: String) : Step
@@ -73,8 +78,13 @@ object BasalPeriod {
         val from = start.day
         val days = now.days
         val at = ApexDailyRecord.indexOfKept(days, from) ?: return Step.Restart("kept_day_gone")
-        val moved = StatisticsDays.counted(days.take(at)).sumOf { it.basalUnits + it.tbrUnits } + (days[at].basalUnits + days[at].tbrUnits) - (from.basalUnits + from.tbrUnits)
-        return Step.Close(Math.round(moved / ApexProtocol.DOSE_SCALE) * ApexProtocol.DOSE_SCALE)
+        val top = days.first()
+        // A new date on top, not a day begun over after the power was lost: it goes to the next period.
+        val newDay = at > 0 && top.hasDate && top.dayClockSeconds != from.dayClockSeconds
+        val after = StatisticsDays.counted(days.take(at)).let { if (newDay) it.drop(1) else it }
+        val moved = after.sumOf { it.basalUnits + it.tbrUnits } + (days[at].basalUnits + days[at].tbrUnits) - (from.basalUnits + from.tbrUnits)
+        val next = if (newDay) ApexDailyRecord(0, 0.0, 0.0, 0.0, top.dayClockSeconds) else null
+        return Step.Close(Math.round(moved / ApexProtocol.DOSE_SCALE) * ApexProtocol.DOSE_SCALE, next)
     }
 
     /** True when the heartbeat at [atMs] ends the period begun at [startMs]: the next heartbeat. */

@@ -7,7 +7,7 @@ package app.aaps.pump.apex
 object ApexConst {
 
     /** The driver's version, on its screen and in the log at start: the date of the change and its number that day. */
-    const val DRIVER_VERSION = "v4 2026.11.27.3"
+    const val DRIVER_VERSION = "v4 2026.11.28.3"
 
     /** The protocol from which the pump can be given a Bluetooth password. */
     const val PASSWORD_PROTOCOL_MAJOR = 4

@@ -35,9 +35,9 @@ class PictureReport(
 
     /** The few numbers the screen shows of the picture; [reconciled] false: no comparison of the day. */
     fun show(serial: String, picture: PumpPicture, reconciled: Boolean) {
-        val today = picture.days.answer.entries.firstOrNull()?.record
-        val topBolus = topBolus(serial, picture)
         val offsetMs = pumpClock.offsetMs(serial)
+        val today = picture.days.answer.entries.firstOrNull()?.record?.let { atMark(it, picture.heartbeatAtMs, offsetMs) }
+        val topBolus = topBolus(serial, picture)
         pumpState.lastPicture = PictureSummary(
             heartbeatAtMs = picture.heartbeatAtMs,
             dayBolusUnits = today?.bolusUnits, dayBasalUnits = today?.basalUnits, dayTbrUnits = today?.tbrUnits,
@@ -90,5 +90,15 @@ class PictureReport(
             "dayBolus" to today?.bolusUnits, "dayBasal" to today?.basalUnits, "dayTbr" to today?.tbrUnits,
             "broken" to brokenJournals(picture).ifEmpty { null }
         )
+    }
+
+    companion object {
+
+        /**
+         * [day] as it stood at the mark of the heartbeat at [heartbeatAtMs]. At the pump's midnight the new day holds
+         * nothing at the mark: what the statistics show in it was given in the seconds before they were read.
+         */
+        fun atMark(day: ApexDailyRecord, heartbeatAtMs: Long, offsetMs: Long): ApexDailyRecord =
+            if (ApexClock.momentOf(day.dayClockSeconds, offsetMs) == ApexClock.minuteStart(heartbeatAtMs)) ApexDailyRecord(day.index, 0.0, 0.0, 0.0, day.dayClockSeconds) else day
     }
 }
