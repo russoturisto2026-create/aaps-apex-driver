@@ -1,3 +1,12 @@
+# Changes: v4 from 2026.11.27.2 to 2026.11.27.3
+
+## Start
+
+- **A record AAPS already holds counts in the day of its stamp.** The pump counts a bolus in the
+  day of its stamp. A record stamped just after midnight, while the pump's clock stood in a time
+  zone ahead, has its row in AAPS before midnight. The check of the days now takes the stamp, so
+  the day the record belongs to is not left short.
+
 # Changes: v4 from 2026.11.27.1 to 2026.11.27.2
 
 ## Start
@@ -200,6 +209,15 @@ The branch `main` holds the v4 driver.
 - While extended boluses are allowed on the pump, the driver takes no command.
 
 ---
+
+# Изменения: v4 с 2026.11.27.2 до 2026.11.27.3
+
+## Запуск
+
+- **Запись, которая уже есть в AAPS, считается в дне своего штампа.** Помпа относит болюс к дню
+  его штампа. У записи со штампом сразу после полуночи, когда часы помпы стояли в поясе впереди,
+  строка в AAPS стоит до полуночи. Сверка дней теперь берёт штамп, и день, к которому запись
+  относится, не остаётся с недостачей.
 
 # Изменения: v4 с 2026.11.27.1 до 2026.11.27.2
 

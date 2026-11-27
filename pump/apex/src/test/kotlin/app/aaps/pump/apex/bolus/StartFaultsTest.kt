@@ -12,6 +12,7 @@ import app.aaps.pump.apex.protocol.ApexBolusRecord
 import app.aaps.pump.apex.protocol.ApexJournalAnswer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -102,6 +103,21 @@ class StartFaultsTest {
         assertEquals(stamps.map { it * 1000L }, cells().map { it.atMs })
         // Only the record on top goes to AAPS, at the minute of its stamp; the rows of the two stay as they are.
         assertEquals(listOf(top.clockSeconds / 60 * 60_000L), bench.rows().map { it.timestampMs })
+        assertTrue(bench.notices().isEmpty())
+    }
+
+    @Test
+    fun `a record stamped after midnight in a zone ahead, its row in AAPS before midnight - it counts in the day of its stamp, nothing is left`() {
+        bench.newestBolusMs = null
+        // 03.11 00:05:59 on the pump's clock an hour ahead: AAPS holds it at 02.11 23:05:59.
+        val afterMidnight = BolusRecordFrames.record(TWO - 14 * 3600L + 5 * 60, 12, 12)
+        bench.aapsRows = mapOf(keyOf(afterMidnight) to (afterMidnight.clockSeconds - 3600L) * 1000L)
+        val records = listOf(at(5, 4), at(3, 4), afterMidnight, yesterday)
+        bench.thenWhole(records)
+        // The bolus field of 03.11: 0.1 + 0.1 and the 0.3 U of the record after midnight.
+        assertTrue(bench.settle(records, dayRaw = 20))
+        assertNull(MismatchLine(bench.store, bench.serial).mark())
+        assertTrue(cells().none { it.faulty })
         assertTrue(bench.notices().isEmpty())
     }
 

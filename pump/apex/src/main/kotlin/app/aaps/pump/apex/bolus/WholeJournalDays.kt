@@ -34,8 +34,11 @@ internal class JournalLine(val record: JournalEntry, val bolus: ApexBolusRecord,
     /** Where a sound line stands for the window of its neighbours: the time of its row in AAPS, else its stamp. */
     val soundMs: Long get() = if (held) atMs else record.atMs
 
-    /** The moment that gives its day: a record that may be faulty belongs to the day of its place in the journal. */
-    val placeMs: Long get() = if (faulty || candidate) middleMs else atMs
+    /**
+     * The moment that gives its day: a record that may be faulty belongs to the day of its place in the journal. A held
+     * one belongs to the day of its stamp, as the pump counts it, even when its row stands in the day before.
+     */
+    val placeMs: Long get() = if (faulty || candidate) middleMs else if (held) record.atMs else atMs
 }
 
 /**
@@ -111,7 +114,7 @@ internal class WholeJournalDays(
         val today = StatisticsDays.datesOf(newestFirst).firstOrNull() ?: return Checked(emptyList(), 0.0, null)
         val yesterday = today - ApexClock.DAY_SECONDS
         val dayOf = { atMs: Long -> StatisticsDays.dayOf(atMs, offsetMs) }
-        val oldestDay = lines.filter { !it.faulty && !it.candidate }.minOfOrNull { dayOf(it.soundMs) } ?: return Checked(emptyList(), 0.0, null)
+        val oldestDay = lines.filter { !it.faulty && !it.candidate }.minOfOrNull { dayOf(it.record.atMs) } ?: return Checked(emptyList(), 0.0, null)
         pickDays(lines, open, newestFirst, dayOf)
         val checked = listOf(today) + listOf(yesterday).filter { day -> lines.any { dayOf(it.placeMs) == day && it.placeMs >= fromMs } }
         val notices = ArrayList<AapsWrite>()
