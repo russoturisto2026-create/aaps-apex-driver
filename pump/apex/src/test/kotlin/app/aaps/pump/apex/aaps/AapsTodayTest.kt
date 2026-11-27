@@ -41,9 +41,21 @@ class AapsTodayTest {
         val waiting = bolus(3_000L, IDs(temporaryId = 7L, pumpSerial = "12345678"))
         val fromPump = bolus(2_000L, IDs(pumpId = 5L, pumpSerial = "12345678"))
         val byHand = bolus(1_000L, IDs())
-        runBlocking { whenever(persistenceLayer.getBolusesFromTime(500L, false)).thenReturn(listOf(waiting, fromPump, byHand)) }
+        // The rows come in the order they were made: a row laid over itself later keeps its old place.
+        runBlocking { whenever(persistenceLayer.getBolusesFromTime(500L, true)).thenReturn(listOf(byHand, fromPump, waiting)) }
         assertEquals(2_000L, runBlocking { today.newestBolusMs(fromMs = 500L) })
-        runBlocking { whenever(persistenceLayer.getBolusesFromTime(500L, false)).thenReturn(listOf(waiting, byHand)) }
+        runBlocking { whenever(persistenceLayer.getBolusesFromTime(500L, true)).thenReturn(listOf(fromPump, byHand, waiting)) }
+        assertEquals(2_000L, runBlocking { today.newestBolusMs(fromMs = 500L) })
+        runBlocking { whenever(persistenceLayer.getBolusesFromTime(500L, true)).thenReturn(listOf(waiting, byHand)) }
         assertEquals(1_000L, runBlocking { today.newestBolusMs(fromMs = 500L) })
+    }
+
+    @Test
+    fun `the rows of the pump by their key - not those of another pump, not ours that wait for their record`() {
+        val fromPump = bolus(2_000L, IDs(pumpId = 5L, pumpSerial = "12345678"))
+        val otherPump = bolus(2_500L, IDs(pumpId = 6L, pumpSerial = "87654321"))
+        val waiting = bolus(3_000L, IDs(temporaryId = 7L, pumpSerial = "12345678"))
+        runBlocking { whenever(persistenceLayer.getBolusesFromTime(500L, true)).thenReturn(listOf(fromPump, otherPump, waiting, bolus(1_000L, IDs()))) }
+        assertEquals(mapOf(5L to 2_000L), runBlocking { today.pumpRowsMs("12345678", 500L) })
     }
 }

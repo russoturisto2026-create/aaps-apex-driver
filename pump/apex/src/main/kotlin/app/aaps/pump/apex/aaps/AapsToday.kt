@@ -43,10 +43,15 @@ class AapsToday(
     /**
      * When the newest bolus in AAPS from [fromMs] on was given, from any source; null while there is none. A row
      * of a pump that still waits for its record, with a temporary key only, does not count: the record it waits
-     * for may stand after an older bolus that AAPS does not have yet.
+     * for may stand after an older bolus that AAPS does not have yet. Taken by time: the list comes in the order
+     * the rows were made, not in the order of their time.
      */
     suspend fun newestBolusMs(fromMs: Long): Long? =
-        persistenceLayer.getBolusesFromTime(fromMs, false).firstOrNull { it.ids.temporaryId == null || it.ids.pumpId != null }?.timestamp
+        persistenceLayer.getBolusesFromTime(fromMs, true).filter { it.ids.temporaryId == null || it.ids.pumpId != null }.maxOfOrNull { it.timestamp }
+
+    /** The rows of the pump [serial] from [fromMs] on that came from its records: the time of each, by its key, see `BolusKey`. */
+    suspend fun pumpRowsMs(serial: String, fromMs: Long): Map<Long, Long> =
+        persistenceLayer.getBolusesFromTime(fromMs, true).filter { it.ids.pumpSerial == serial }.mapNotNull { row -> row.ids.pumpId?.let { it to row.timestamp } }.toMap()
 
     /** How long the insulin in use acts, ms, by the profile AAPS runs; null while it has none. */
     suspend fun insulinActsMs(): Long? = profileFunction.getRunningOrRequestedICfg()?.insulinEndTime

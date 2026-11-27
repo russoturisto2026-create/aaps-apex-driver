@@ -135,6 +135,7 @@ class ReplayRig(
         // The bolus journal and the basal period are told the basal the replay's rows and the status rates order.
         val orderedToday: AapsToday = mock()
         runBlocking { whenever(orderedToday.basalBetween(any(), any())).thenAnswer { ordered.between(it.getArgument(0), it.getArgument(1)) } }
+        runBlocking { whenever(orderedToday.pumpRowsMs(any(), any())).thenReturn(emptyMap()) }
         // The record has one status per heartbeat: the reads of the check whether a bolus runs get it again, with no pause.
         val runningBolus = RunningBolus(log, manager, mock<ApexBolusDelivery>(), trace).apply { pause = {} }
         val keeper = BasalPeriodKeeper(log, preferences, store, pumpSync, persistence, mock<ProfileFunction>(), orderedToday, trace)

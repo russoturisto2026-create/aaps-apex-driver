@@ -36,8 +36,9 @@ import kotlin.math.abs
  * from whatever source it came but a row that waits for its record, see [AapsToday.newestBolusMs], and none from
  * before the pump was registered: the later of the three bounds
  * counts. What is older is taken as in AAPS already and stays in the cells only; so does a faulty record
- * whose window starts before the bound: AAPS may hold its bolus. A record AAPS holds already gets the same
- * key again, see `BolusKey`, and its row lays over itself. Each cell keeps when this ran and the bolus field
+ * whose window starts before the bound: AAPS may hold its bolus. A record whose key AAPS holds, see `BolusKey`,
+ * is sound at the time of that row and nothing is written for it: the row was made when the driver knew the
+ * zone of the stamp, which a lost clock log no longer tells. Each cell keeps when this ran and the bolus field
  * of its day, see [BolusCells.Filled].
  */
 class WholeJournal(
@@ -113,7 +114,11 @@ class WholeJournal(
         // A record pairs only with our bolus of its time, see BolusAccount.pair.
         val open = account.openActions().toMutableList()
         val paired = records.zip(account.pair(records, open)).toMap()
-        val lines = lines(records, paired, account, reservoir, nowMs, notBeforeMs, offsetMs, store.clockLog(serial))
+        val keys = journal.keys()
+        // A stamp is off by its zone at most by a day: the rows from a day before the oldest record hold every key of the journal.
+        val rows = records.minOfOrNull { it.atMs }?.let { runBlocking { aapsToday.pumpRowsMs(serial, it - ApexClock.DAY_MS) } }.orEmpty()
+        val held = keys.mapNotNull { (seq, key) -> rows[key]?.let { seq to it } }.toMap()
+        val lines = lines(records, paired, account, reservoir, nowMs, notBeforeMs, offsetMs, store.clockLog(serial), held)
         val newestFirst = days.entries.map { it.record }
         val writes = ArrayList<AapsWrite>()
         val seen = open.associate { it.id to FaultyCell.startUnits(it, account) }
@@ -122,7 +127,6 @@ class WholeJournal(
         writes += checked.notices
         val told = checked.leftFromMs?.let { MismatchLine(store, serial).draw(it, comparedAtMs, checked.leftUnits, newestFirst) }.orEmpty()
         val filled = ArrayList<BolusCells.Filled>()
-        val keys = journal.keys()
         val sharedOn = lines.any { it.faulty && it.units >= ApexProtocol.HALF_STEP }
         for (line in lines) {
             val key = keys[line.record.seq]
@@ -132,6 +136,8 @@ class WholeJournal(
                     writes += account.row(line.bolus, line.action, key, notBeforeMs)
                     true
                 }
+
+                line.held                                  -> true
 
                 line.faulty && line.windowFromMs >= fromMs -> {
                     val some = line.units >= ApexProtocol.HALF_STEP
@@ -166,7 +172,8 @@ class WholeJournal(
     }
 
     /**
-     * [records], oldest first, as lines: ours at the row of our bolus, the others as the record says. A record
+     * [records], oldest first, as lines: ours at the row of our bolus, a record whose key AAPS holds at the time of
+     * that row, [held] by its number, the others as the record says. A record
      * the pump cannot have written is faulty: at nothing, in the middle of its window. A record stamped before a
      * sound record below it is a candidate, its dose checked with its day, see [WholeJournalDays.checkDays]. When [zoneLog] holds no
      * zone move in its window, nothing natural puts it there: its date is faulty, it stands in the middle of the
@@ -175,16 +182,18 @@ class WholeJournal(
      */
     private fun lines(
         records: List<JournalEntry>, paired: Map<JournalEntry, Action?>, account: BolusAccount, reservoir: Double?, nowMs: Long, notBeforeMs: Long,
-        offsetMs: Long, zoneLog: List<ClockLogEntry>
+        offsetMs: Long, zoneLog: List<ClockLogEntry>, held: Map<Long, Long>
     ): List<JournalLine> {
         var latestBelowMs: Long? = null
         val lines = records.mapNotNull { record ->
             val bolus = ApexBolusRecord.decode(record.frame) ?: return@mapNotNull null
             val action = paired[record]
-            val suspicion = if (action != null) Suspicion.SOUND else FaultyCell.suspicion(bolus, record.atMs, latestBelowMs, reservoir, nowMs)
+            val heldMs = if (action == null) held[record.seq] else null
+            val suspicion = if (action != null || heldMs != null) Suspicion.SOUND else FaultyCell.suspicion(bolus, record.atMs, latestBelowMs, reservoir, nowMs)
             val faulty = suspicion == Suspicion.FAULTY
             val candidate = suspicion == Suspicion.OUT_OF_PLACE
-            if (suspicion == Suspicion.SOUND) latestBelowMs = maxOf(latestBelowMs ?: record.atMs, record.atMs)
+            val soundMs = heldMs ?: record.atMs
+            if (suspicion == Suspicion.SOUND) latestBelowMs = maxOf(latestBelowMs ?: soundMs, soundMs)
             if (faulty || candidate) {
                 aapsLogger.warn(
                     LTag.PUMP,
@@ -194,14 +203,15 @@ class WholeJournal(
                 trace.event(ApexTraceCat.STATE, "bolus_start_suspect", "seq" to record.seq, "stamp" to record.atMs, "faulty" to faulty)
             }
             if (action != null) account.row(bolus, action, null, notBeforeMs).let { JournalLine(record, bolus, action, false, false, it.amountUnits, it.timestampMs) }
+            else if (heldMs != null) JournalLine(record, bolus, null, false, false, bolus.totalDeliveredUnits, heldMs).apply { this.held = true }
             else JournalLine(record, bolus, null, faulty, candidate, if (faulty) 0.0 else bolus.totalDeliveredUnits, record.atMs)
         }
         // The window of a suspect record lies between the sound records around it, the newest one's up to now.
         lines.forEachIndexed { i, line ->
             if (!line.faulty && !line.candidate) return@forEachIndexed
             val sound = { it: JournalLine -> !it.faulty && !it.candidate }
-            val fromMs = lines.take(i).lastOrNull(sound)?.record?.atMs ?: line.record.atMs
-            val toMs = lines.drop(i + 1).firstOrNull(sound)?.record?.atMs ?: nowMs
+            val fromMs = lines.take(i).lastOrNull(sound)?.soundMs ?: line.record.atMs
+            val toMs = lines.drop(i + 1).firstOrNull(sound)?.soundMs ?: nowMs
             // Across midnight the record stands in one day only, the one the statistics give it, see checkDays.
             val firstMidnightMs = ApexClock.momentOf(StatisticsDays.dayOf(fromMs, offsetMs) + ApexClock.DAY_SECONDS, offsetMs)
             val lastMidnightMs = ApexClock.momentOf(StatisticsDays.dayOf(toMs, offsetMs), offsetMs)

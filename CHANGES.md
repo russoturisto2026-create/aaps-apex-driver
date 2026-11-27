@@ -1,3 +1,14 @@
+# Changes: v4 from 2026.11.27.1 to 2026.11.27.2
+
+## Start
+
+- **A journal read whole keeps the rows AAPS already holds.** A record whose row is in AAPS is
+  taken as sound at the time of that row, and nothing is written for it. Before, when the
+  driver's own data were lost, the driver did not know the time zone of such a record and wrote
+  it again an hour off.
+- **The newest bolus in AAPS is found by its time.** Before, the first row of the list was taken,
+  and it was the oldest one, so later records were written over their own rows.
+
 # Changes: v4 from 2026.11.18.3 to 2026.11.27.1
 
 ## Bolus accounting
@@ -189,6 +200,17 @@ The branch `main` holds the v4 driver.
 - While extended boluses are allowed on the pump, the driver takes no command.
 
 ---
+
+# Изменения: v4 с 2026.11.27.1 до 2026.11.27.2
+
+## Запуск
+
+- **Журнал, прочитанный целиком, не трогает строки, которые уже есть в AAPS.** Запись, чья строка
+  есть в AAPS, считается исправной и стоит на времени этой строки, для неё ничего не пишется.
+  Раньше, если собственные данные драйвера были потеряны, он не знал пояса такой записи и писал
+  её заново со сдвигом на час.
+- **Последний болюс в AAPS ищется по времени.** Раньше бралась первая строка списка, а это была
+  самая старая, и более поздние записи писались поверх своих же строк.
 
 # Изменения: v4 с 2026.11.18.3 до 2026.11.27.1
 

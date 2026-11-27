@@ -51,6 +51,9 @@ class JournalBench {
     /** When the newest bolus in AAPS was given; null while AAPS has none. */
     var newestBolusMs: Long? = null
 
+    /** The rows of this pump AAPS holds: the time of each by its key. */
+    var aapsRows: Map<Long, Long> = emptyMap()
+
     /** How long the insulin acts by the profile, ms; five hours by default; null while AAPS has no profile. */
     var insulinActsMs: Long? = 5 * 3_600_000L
 
@@ -82,6 +85,7 @@ class JournalBench {
         }.`when`(carrier).carry(anyArg(), ArgumentMatchers.anyString())
         runBlocking { whenever(aapsToday.newestBolusMs(ArgumentMatchers.anyLong())).thenAnswer { newestBolusMs } }
         runBlocking { whenever(aapsToday.insulinActsMs()).thenAnswer { insulinActsMs } }
+        runBlocking { whenever(aapsToday.pumpRowsMs(ArgumentMatchers.anyString(), ArgumentMatchers.anyLong())).thenAnswer { aapsRows } }
         journal = BolusReconciliation(AAPSLoggerTest(), store, manager, reader, carrier, aapsToday, mock(Preferences::class.java), mock(ApexPumpState::class.java), trace)
     }
 

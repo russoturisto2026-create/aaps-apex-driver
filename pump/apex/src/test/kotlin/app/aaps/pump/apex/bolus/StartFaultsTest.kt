@@ -8,6 +8,7 @@ import app.aaps.pump.apex.bolus.JournalBench.Companion.at
 import app.aaps.pump.apex.bolus.JournalBench.Companion.oldCell
 import app.aaps.pump.apex.store.BolusCell
 import app.aaps.pump.apex.clock.ApexClock
+import app.aaps.pump.apex.protocol.ApexBolusRecord
 import app.aaps.pump.apex.protocol.ApexJournalAnswer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -87,6 +88,24 @@ class StartFaultsTest {
         assertFalse(top.faulty)
         assertEquals(0.2, top.units!!, 1e-9)
     }
+
+    @Test
+    fun `a record stamped before the one below it, AAPS holds the rows of those below by their key - sound, those keep their rows, no notice`() {
+        bench.newestBolusMs = null
+        // The two records of today were stamped while the clock stood an hour ahead: AAPS holds them an hour before their stamps.
+        bench.aapsRows = listOf(at(3, 4), at(5, 4)).associate { keyOf(it) to (it.clockSeconds - 3600L) * 1000L }
+        val top = BolusRecordFrames.record(TWO - 30 * 60L, 8, 8)
+        assertTrue(settle(top, dayRaw = 16))
+        assertTrue(cells().none { it.faulty })
+        // Yesterday's record and the one on top at their stamps, the two between at their rows.
+        val stamps = listOf(yesterday.clockSeconds, TWO - 3600L + 3 * 60 + 59, TWO - 3600L + 5 * 60 + 59, top.clockSeconds)
+        assertEquals(stamps.map { it * 1000L }, cells().map { it.atMs })
+        // Only the record on top goes to AAPS, at the minute of its stamp; the rows of the two stay as they are.
+        assertEquals(listOf(top.clockSeconds / 60 * 60_000L), bench.rows().map { it.timestampMs })
+        assertTrue(bench.notices().isEmpty())
+    }
+
+    private fun keyOf(answered: BolusCells.Answered) = BolusKey.of(ApexBolusRecord.decode(answered.frame)!!, 0)
 
     @Test
     fun `a faulty record whose window is after the bound - its row goes to AAPS with the rest, and the user is told`() {
